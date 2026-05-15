@@ -184,9 +184,15 @@ export class ImageService {
           name: fileName,
         } as any)
 
+        // Use tasker-documents bucket for all images (this bucket exists)
+        // The folder parameter is used as the path prefix, not the bucket name
+        const bucketName = 'tasker-documents'
+        
+        console.log(`📤 Uploading to bucket: ${bucketName}, path: ${filePath}`)
+        
         // Upload to Supabase Storage with timeout
         const uploadPromise = supabase.storage
-          .from('tasker-documents')
+          .from(bucketName)
           .upload(filePath, formData, {
             contentType: 'image/jpeg',
             upsert: false
@@ -200,12 +206,17 @@ export class ImageService {
         const { data, error } = await Promise.race([uploadPromise, timeoutPromise]) as any
 
         if (error) {
+          // If bucket doesn't exist, try with a different approach
+          if (error.message?.includes('Bucket not found') || error.message?.includes('not found')) {
+            console.error(`❌ Bucket ${bucketName} not found. Please create the bucket in Supabase Storage.`)
+            throw new Error(`Storage bucket not found. Please contact support or create the '${bucketName}' bucket in Supabase Storage.`)
+          }
           throw error
         }
 
         // Get public URL
         const { data: urlData } = supabase.storage
-          .from('tasker-documents')
+          .from(bucketName)
           .getPublicUrl(filePath)
 
         console.log(`✅ Upload successful on attempt ${attempt}`)

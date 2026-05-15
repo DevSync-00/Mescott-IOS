@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   ActivityIndicator,
   TextInput,
   Image,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
@@ -17,29 +19,17 @@ import { useAuth } from '../contexts/SimpleAuthContext'
 import { useNotifications } from '../contexts/NotificationContext'
 import { TaskService, Task } from '../services/TaskService'
 import Colors from '../constants/Colors'
+import SkeletonLoader, { SkeletonList } from '../components/SkeletonLoader'
+import NotificationsSheet from '../components/NotificationsSheet'
+import CategorySearchSheet from '../components/CategorySearchSheet'
+import { CATEGORIES } from '../constants/Categories'
+import TaskDetailSheet from '../components/TaskDetailSheet'
 
 // Splash screen is handled in _layout.tsx
 
 const { width } = Dimensions.get('window')
 
-const categories = [
-  { name: 'Cleaning', icon: 'brush', color: '#FF6B6B' },
-  { name: 'Handyman', icon: 'hammer', color: '#4ECDC4' },
-  { name: 'Delivery', icon: 'car', color: '#45B7D1' },
-  { name: 'Photography', icon: 'camera', color: '#96CEB4' },
-  { name: 'IT Support', icon: 'laptop', color: '#FFEAA7' },
-  { name: 'Gardening', icon: 'leaf', color: '#DDA0DD' },
-  { name: 'Moving', icon: 'cube', color: '#98D8C8' },
-  { name: 'Pet Care', icon: 'paw', color: '#F7DC6F' },
-  { name: 'Tutoring', icon: 'school', color: '#A8E6CF' },
-  { name: 'Cooking', icon: 'restaurant', color: '#FFB6C1' },
-  { name: 'Painting', icon: 'color-palette', color: '#DDA0DD' },
-  { name: 'Plumbing', icon: 'water', color: '#87CEEB' },
-  { name: 'Electrical', icon: 'flash', color: '#F0E68C' },
-  { name: 'Carpentry', icon: 'construct', color: '#DEB887' },
-  { name: 'Landscaping', icon: 'leaf-outline', color: '#98FB98' },
-  { name: 'Event Planning', icon: 'calendar', color: '#FFA07A' },
-]
+const categories = CATEGORIES
 
 const featuredServices = [
   {
@@ -86,6 +76,11 @@ export default function Index() {
   const [featuredTasks, setFeaturedTasks] = useState<Task[]>([])
   const [recentTasks, setRecentTasks] = useState<Task[]>([])
   const [loadingTasks, setLoadingTasks] = useState(true)
+  const [notificationsVisible, setNotificationsVisible] = useState(false)
+  const [showAllCategories, setShowAllCategories] = useState(false)
+  const [categorySearchVisible, setCategorySearchVisible] = useState(false)
+  const [taskDetailVisible, setTaskDetailVisible] = useState(false)
+  const [selectedTaskIdForDetail, setSelectedTaskIdForDetail] = useState<string | null>(null)
 
   const loadTasks = async () => {
     if (!user) return
@@ -138,28 +133,22 @@ export default function Index() {
     })
   }
 
-  const getGreeting = () => {
-    const hour = new Date().getHours()
-    if (hour < 12) return 'Morning'
-    if (hour < 18) return 'Afternoon'
-    return 'Evening'
-  }
+  const scrollViewRef = useRef<ScrollView>(null)
 
   return (
-    <View style={styles.container}>
-      {/* Fixed Header Section */}
+    <SafeAreaView style={styles.container} edges={['bottom']}>
+      {/* Fixed Header */}
       <View style={styles.header}>
         <View style={styles.headerTop}>
           <View style={styles.greetingContainer}>
-            <Text style={styles.greeting}>Good {getGreeting()}</Text>
-            <Text style={styles.userName}>
-              {user ? `Welcome back, ${user.full_name.split(' ')[0]}!` : 'Welcome to Mescott!'}
+            <Text style={styles.brandName}>
+              Mescott
             </Text>
           </View>
           <View style={styles.headerButtons}>
             <TouchableOpacity 
               style={styles.notificationButton}
-              onPress={() => router.push('/notifications')}
+              onPress={() => setNotificationsVisible(true)}
             >
               <Ionicons name="notifications-outline" size={22} color={Colors.neutral[600]} />
               {unreadCount > 0 && (
@@ -174,31 +163,29 @@ export default function Index() {
         </View>
 
         {/* Search Bar */}
-        <View style={styles.searchContainer}>
+        <TouchableOpacity style={styles.searchContainer} onPress={() => setCategorySearchVisible(true)} activeOpacity={0.8}>
           <Ionicons name="search" size={20} color={Colors.neutral[400]} />
           <TextInput
             style={styles.searchInput}
             placeholder="Search for services..."
             placeholderTextColor={Colors.neutral[400]}
+            editable={false}
+            pointerEvents="none"
           />
-          <TouchableOpacity style={styles.filterButton}>
-            <Ionicons name="options-outline" size={20} color={Colors.primary[500]} />
-          </TouchableOpacity>
-        </View>
+        </TouchableOpacity>
       </View>
 
       {/* Scrollable Content */}
-      <ScrollView 
-        style={styles.scrollView} 
-        showsVerticalScrollIndicator={true}
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={styles.scrollContent}
-        bounces={false}
-        alwaysBounceVertical={false}
-        overScrollMode="never"
+      <ScrollView
+        ref={scrollViewRef}
+        style={styles.content}
+        contentContainerStyle={{ paddingBottom: 120 }}
+        bounces={true}
+        alwaysBounceVertical={true}
+        showsVerticalScrollIndicator={false}
+        overScrollMode="always"
         scrollEventThrottle={16}
       >
-
         {/* Quick Actions */}
         <View style={styles.quickActionsSection}>
           <Text style={styles.sectionTitle}>Quick Actions</Text>
@@ -237,30 +224,6 @@ export default function Index() {
           </View>
         </View>
 
-        {/* Categories Section */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Browse Categories</Text>
-            <TouchableOpacity>
-              <Text style={styles.seeAllText}>See All</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.categoriesGrid}>
-            {categories.map((category, index) => (
-              <TouchableOpacity 
-                key={index} 
-                style={styles.categoryCard}
-                onPress={() => goToCategory(category.name)}
-              >
-                <View style={[styles.categoryIcon, { backgroundColor: category.color + '20' }]}>
-                  <Ionicons name={category.icon as any} size={28} color={category.color} />
-                </View>
-                <Text style={styles.categoryText}>{category.name}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-
         {/* Featured Tasks */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
@@ -271,8 +234,7 @@ export default function Index() {
           </View>
           {loadingTasks ? (
             <View style={styles.emptyState}>
-              <ActivityIndicator size="small" color={Colors.primary[500]} />
-              <Text style={styles.loadingTextSmall}>Loading tasks...</Text>
+              <SkeletonList count={3} />
             </View>
           ) : (
             <ScrollView 
@@ -285,10 +247,7 @@ export default function Index() {
                 <TouchableOpacity 
                   key={task.id} 
                   style={styles.serviceCard}
-                  onPress={() => router.push({
-                    pathname: '/task-detail',
-                    params: { taskId: task.id }
-                  })}
+                  onPress={() => { setSelectedTaskIdForDetail(task.id); setTaskDetailVisible(true) }}
                 >
                   {/* Task Image */}
         {task.photos && task.photos.length > 0 ? (
@@ -354,6 +313,30 @@ export default function Index() {
           )}
         </View>
 
+        {/* Categories Section */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Browse Categories</Text>
+            <TouchableOpacity onPress={() => setShowAllCategories(!showAllCategories)}>
+              <Text style={styles.seeAllText}>{showAllCategories ? 'See Less' : 'See All'}</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.categoriesGrid}>
+            {(showAllCategories ? categories : categories.slice(0, 6)).map((category, index) => (
+              <TouchableOpacity
+                key={index}
+                style={styles.categoryCard}
+                onPress={() => goToCategory(category.name)}
+              >
+                <View style={[styles.categoryIcon, { backgroundColor: category.color + '20' }]}>
+                  <Ionicons name={category.icon as any} size={28} color={category.color} />
+                </View>
+                <Text style={styles.categoryText}>{category.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
         {/* How It Works */}
         <View style={styles.section}>
             <Text style={styles.sectionTitle}>How Mescott Works</Text>
@@ -380,12 +363,32 @@ export default function Index() {
         {/* Bottom Spacing */}
         <View style={styles.bottomSpacing} />
       </ScrollView>
-    </View>
+      <NotificationsSheet
+        visible={notificationsVisible}
+        onClose={() => setNotificationsVisible(false)}
+      />
+      <CategorySearchSheet
+        visible={categorySearchVisible}
+        onClose={() => setCategorySearchVisible(false)}
+        onSelectCategory={(name) => {
+          setCategorySearchVisible(false)
+          router.push({ pathname: '/post-task', params: { category: name } })
+        }}
+      />
+      <TaskDetailSheet
+        taskId={selectedTaskIdForDetail || undefined}
+        visible={taskDetailVisible}
+        onClose={() => { setTaskDetailVisible(false); setSelectedTaskIdForDetail(null) }}
+      />
+    </SafeAreaView>
   )
 }
 
 const styles = StyleSheet.create({
   container: {
+    flex: 1,
+  },
+  content: {
     flex: 1,
     backgroundColor: Colors.background.secondary,
   },
@@ -393,16 +396,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingTop: 8, // Small padding to prevent dragging from top safe area
+    paddingTop: 0,
     paddingBottom: 5,
   },
   header: {
     backgroundColor: Colors.background.primary,
     paddingHorizontal: 20,
-    paddingTop: 20,
+    paddingTop: 4,
     paddingBottom: 24,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -412,8 +415,8 @@ const styles = StyleSheet.create({
   headerTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 20,
+    alignItems: 'center',
+    marginBottom: 12,
   },
   greetingContainer: {
     flex: 1,
@@ -427,6 +430,13 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
     color: Colors.neutral[900],
+  },
+  brandName: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: Colors.primary[500],
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
   notificationButton: {
     width: 44,
@@ -474,19 +484,21 @@ const styles = StyleSheet.create({
   },
   quickActionsSection: {
     paddingHorizontal: 20,
-    paddingVertical: 24,
+    paddingVertical: 12,
+    backgroundColor: Colors.background.primary,
+    marginBottom: 12,
   },
   section: {
     paddingHorizontal: 20,
-    paddingVertical: 24,
+    paddingVertical: 12,
     backgroundColor: Colors.background.primary,
-    marginBottom: 8,
+    marginBottom: 12,
   },
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 10,
   },
   sectionTitle: {
     fontSize: 20,
@@ -502,6 +514,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 12,
+    marginTop: 10,
   },
   quickActionCard: {
     flex: 1,
@@ -691,7 +704,8 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   stepsContainer: {
-    gap: 16,
+    gap: 10,
+    marginTop: 10,
   },
   stepCard: {
     flexDirection: 'row',
@@ -736,7 +750,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   bottomSpacing: {
-    height: 10,
+    height: 2,
   },
   serviceDateTime: {
     flexDirection: 'row',

@@ -137,52 +137,66 @@ export default function Settings() {
     {
       title: 'Work',
       items: [
-        {
+        // Temporarily hidden for v1.0 - Switch to Customer mode
+        // {
+        //   icon: 'briefcase-outline',
+        //   title: user?.role === 'tasker' || user?.role === 'both' ? 'Switch to Customer' : 'Become a Tasker',
+        //   subtitle: user?.role === 'tasker' || user?.role === 'both' 
+        //     ? 'Switch to customer mode' 
+        //     : 'Apply to become a tasker',
+        //   onPress: user?.role === 'tasker' || user?.role === 'both' ? handleSwitchMode : handleBecomeTasker,
+        //   showArrow: true,
+        //   color: user?.role === 'tasker' || user?.role === 'both' ? Colors.neutral[600] : Colors.primary[500]
+        // },
+        // Temporarily hidden for v1.0 - Work Schedule
+        // {
+        //   icon: 'time-outline',
+        //   title: 'Work Schedule',
+        //   subtitle: 'Manage your availability',
+        //   onPress: () => router.push('/work-schedule'),
+        //   showArrow: true
+        // },
+        // Show "Become a Tasker" only if user is not a tasker
+        ...(user?.role !== 'tasker' && user?.role !== 'both' ? [{
           icon: 'briefcase-outline',
-          title: user?.role === 'tasker' || user?.role === 'both' ? 'Switch to Customer' : 'Become a Tasker',
-          subtitle: user?.role === 'tasker' || user?.role === 'both' 
-            ? 'Switch to customer mode' 
-            : 'Apply to become a tasker',
-          onPress: user?.role === 'tasker' || user?.role === 'both' ? handleSwitchMode : handleBecomeTasker,
+          title: 'Become a Tasker',
+          subtitle: 'Apply to become a tasker',
+          onPress: handleBecomeTasker,
           showArrow: true,
-          color: user?.role === 'tasker' || user?.role === 'both' ? Colors.neutral[600] : Colors.primary[500]
-        },
-        {
-          icon: 'time-outline',
-          title: 'Work Schedule',
-          subtitle: 'Manage your availability',
-          onPress: () => router.push('/work-schedule'),
-          showArrow: true
-        },
+          color: Colors.primary[500]
+        }] : []),
       ]
     },
     {
       title: 'Preferences',
       items: [
-        {
-          icon: 'notifications-outline',
-          title: 'Notifications',
-          subtitle: 'Enable push notifications',
-          switch: true,
-          value: settings?.notifications.push ?? true,
-          onToggle: togglePushNotifications
-        },
-        {
-          icon: 'location-outline',
-          title: 'Location Services',
-          subtitle: 'Allow location access for better matches',
-          switch: true,
-          value: settings?.privacy.showLocation ?? true,
-          onToggle: toggleLocation
-        },
-        {
-          icon: 'moon-outline',
-          title: 'Dark Mode',
-          subtitle: 'Switch between light and dark themes',
-          switch: true,
-          value: (settings?.theme ?? 'system') === 'dark',
-          onToggle: toggleDarkMode
-        },
+        // Temporarily hidden for v1.0 - Notifications toggle
+        // {
+        //   icon: 'notifications-outline',
+        //   title: 'Notifications',
+        //   subtitle: 'Enable push notifications',
+        //   switch: true,
+        //   value: settings?.notifications.push ?? true,
+        //   onToggle: togglePushNotifications
+        // },
+        // Temporarily hidden for v1.0 - Location Services toggle
+        // {
+        //   icon: 'location-outline',
+        //   title: 'Location Services',
+        //   subtitle: 'Allow location access for better matches',
+        //   switch: true,
+        //   value: settings?.privacy.showLocation ?? true,
+        //   onToggle: toggleLocation
+        // },
+        // Temporarily hidden for v1.0 - Dark Mode toggle
+        // {
+        //   icon: 'moon-outline',
+        //   title: 'Dark Mode',
+        //   subtitle: 'Switch between light and dark themes',
+        //   switch: true,
+        //   value: (settings?.theme ?? 'system') === 'dark',
+        //   onToggle: toggleDarkMode
+        // },
         // Temporarily hide language switch until post-launch
       ]
     },
@@ -235,7 +249,7 @@ export default function Settings() {
   ]
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
       {/* Header */}
       <Header
         title="Settings"
@@ -266,9 +280,12 @@ export default function Settings() {
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.scrollContent}
         bounces={true}
+        alwaysBounceVertical={true}
         scrollEventThrottle={16}
       >
-        {!loadingSettings && settingsSections.map((section, sectionIndex) => (
+        {!loadingSettings && settingsSections
+          .filter(section => section.items.length > 0) // Hide empty sections
+          .map((section, sectionIndex) => (
           <View key={sectionIndex} style={styles.section}>
             <Text style={styles.sectionTitle}>{section.title}</Text>
             <View style={styles.sectionContent}>
@@ -299,7 +316,9 @@ export default function Settings() {
                   {'switch' in item && item.switch ? (
                     <Switch
                       value={Boolean('value' in item ? item.value : false)}
-                      onValueChange={'onToggle' in item ? item.onToggle : () => {}}
+                      onValueChange={'onToggle' in item && typeof item.onToggle === 'function' 
+                        ? (item.onToggle as (value: boolean) => void) 
+                        : () => {}}
                       trackColor={{ false: Colors.neutral[300], true: Colors.primary[500] }}
                       thumbColor={Colors.background.primary}
                     />
@@ -317,7 +336,7 @@ export default function Settings() {
         {/* App Info */}
         <View style={styles.appInfo}>
           <Text style={styles.appVersion}>Mescott v1.0.0</Text>
-          <Text style={styles.appCopyright}>© 2024 Mescott. All rights reserved.</Text>
+          <Text style={styles.appCopyright}>© 2025 Mescott. All rights reserved.</Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -377,7 +396,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 20,
+    paddingBottom: 100, // Increased padding to prevent content cutoff
+    flexGrow: 1, // Ensure content can grow to fill available space
   },
   section: {
     marginTop: 24,

@@ -16,10 +16,11 @@ import { useAuth } from '../contexts/SimpleAuthContext'
 import { ProfileService } from '../services/ProfileService'
 import ImageUpload from '../components/ImageUpload'
 import Colors from '../constants/Colors'
+import SkeletonLoader from '../components/SkeletonLoader'
 
 
 export default function EditProfile() {
-  const { user } = useAuth()
+  const { user, refreshUserProfile } = useAuth()
   const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -33,14 +34,14 @@ export default function EditProfile() {
   })
 
   useEffect(() => {
-    if (user?.profile) {
+    if (user?.profile || user) {
       setFormData({
-        fullName: user.profile.full_name || (user as any).full_name || '',
-        username: user.profile.username || (user as any).username || '',
-        phone: user.profile.phone || (user as any).phone || '',
-        bio: (user.profile as any).bio || '',
-        location: (user.profile as any).location || '',
-        avatarUrl: user.profile.avatar_url || ''
+        fullName: user.profile?.full_name || (user as any).full_name || '',
+        username: user.profile?.username || (user as any).username || '',
+        phone: user.profile?.phone || (user as any).phone || '',
+        bio: (user.profile as any)?.bio || '',
+        location: (user.profile as any)?.location || '',
+        avatarUrl: user.profile?.avatar_url || (user as any).avatar_url || ''
       })
     }
   }, [user])
@@ -65,6 +66,9 @@ export default function EditProfile() {
       }
 
       await ProfileService.updateProfile(user.id, updates)
+      
+      // Refresh user profile in auth context so changes appear everywhere
+      await refreshUserProfile()
       
       Alert.alert('Success', 'Profile updated successfully!', [
         { text: 'OK', onPress: () => router.push('/profile') }
@@ -96,25 +100,36 @@ export default function EditProfile() {
           disabled={saving}
         >
           {saving ? (
-            <ActivityIndicator size="small" color={Colors.primary[500]} />
+            <SkeletonLoader width={20} height={20} borderRadius={10} />
           ) : (
             <Text style={styles.saveButtonText}>Save</Text>
           )}
         </TouchableOpacity>
       </View>
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        style={styles.content} 
+        showsVerticalScrollIndicator={false}
+        bounces={true}
+        alwaysBounceVertical={true}
+      >
         {/* Profile Photo */}
         <View style={styles.photoSection}>
+          <Text style={styles.photoSectionTitle}>Profile Photo</Text>
           <ImageUpload
             onImageUploaded={(url: string) => {
-              setFormData(prev => ({ ...prev, avatarUrl: url }))
+              console.log('📸 Image uploaded callback received:', url)
+              setFormData(prev => {
+                const updated = { ...prev, avatarUrl: url }
+                console.log('📸 Updated formData:', updated)
+                return updated
+              })
             }}
             onImageRemoved={() => {
               setFormData(prev => ({ ...prev, avatarUrl: '' }))
             }}
-            currentImage={formData.avatarUrl || undefined}
-            placeholder="Add Profile Photo"
+            currentImage={formData.avatarUrl && formData.avatarUrl.trim().length > 0 ? formData.avatarUrl : undefined}
+            placeholder="Tap to add profile photo"
           />
         </View>
 
@@ -232,7 +247,18 @@ const styles = StyleSheet.create({
   },
   photoSection: {
     alignItems: 'center',
-    paddingVertical: 32,
+    paddingVertical: 24,
+    paddingTop: 20,
+    paddingBottom: 32,
+    minHeight: 250,
+    width: '100%',
+  },
+  photoSectionTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: Colors.neutral[700],
+    marginBottom: 16,
+    alignSelf: 'flex-start',
   },
   avatarContainer: {
     width: 100,

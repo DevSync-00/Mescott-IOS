@@ -29,9 +29,12 @@ export default function TermsOfService() {
         style={styles.content}
         showsVerticalScrollIndicator={true}
         contentContainerStyle={styles.scrollContent}
+        bounces={true}
+        alwaysBounceVertical={true}
+        scrollEventThrottle={16}
       >
         <View style={styles.contentContainer}>
-          <Text style={styles.lastUpdated}>Last updated: December 2024</Text>
+          <Text style={styles.lastUpdated}>Last updated: October 2025</Text>
           
           <Text style={styles.sectionTitle}>1. Acceptance of Terms</Text>
           <Text style={styles.sectionText}>

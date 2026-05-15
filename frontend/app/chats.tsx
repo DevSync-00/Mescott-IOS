@@ -11,12 +11,16 @@ import {
   TextInput,
   StatusBar,
   Dimensions,
+  Alert,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { DeviceEventEmitter } from 'react-native'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../contexts/SimpleAuthContext'
 import { RealtimeChatService, Chat } from '../services/RealtimeChatService'
+import { ChatService } from '../services/ChatService'
 import Colors from '../constants/Colors'
 import SkeletonLoader, { SkeletonList } from '../components/SkeletonLoader'
 
@@ -31,6 +35,7 @@ export default function Chats() {
   const [searchQuery, setSearchQuery] = useState('')
   const [filteredChats, setFilteredChats] = useState<Chat[]>([])
   const [clearedChats, setClearedChats] = useState<Set<string>>(new Set())
+  const CLEARED_KEY = user ? `cleared_unread_${user.id}` : 'cleared_unread'
 
   useFocusEffect(
     React.useCallback(() => {
@@ -46,13 +51,62 @@ export default function Chats() {
     }
   }, [isAuthenticated])
 
+  // Load persisted cleared chats
+  useEffect(() => {
+    (async () => {
+      if (!user?.id) return
+      try {
+        const stored = await AsyncStorage.getItem(`cleared_unread_${user.id}`)
+        if (stored) {
+          const ids: string[] = JSON.parse(stored)
+          setClearedChats(new Set(ids))
+        }
+      } catch {}
+    })()
+  }, [user?.id])
+
+  // React to read events from chat detail
+  useEffect(() => {
+    const readSub = DeviceEventEmitter.addListener('chat:read', (payload: any) => {
+      const id = payload?.chatId
+      if (!id) return
+      setChats(prev => prev.map(c => c.id === id ? { ...c, unread_count: 0 } : c))
+      setFilteredChats(prev => prev.map(c => c.id === id ? { ...c, unread_count: 0 } : c))
+      setClearedChats(prev => new Set([...Array.from(prev), id]))
+    })
+    
+    // React to chat deletion events
+    const deletedSub = DeviceEventEmitter.addListener('chat:deleted', (payload: any) => {
+      const id = payload?.chatId
+      if (!id) return
+      console.log('Chat deleted event received:', id)
+      setChats(prev => prev.filter(c => c.id !== id))
+      setFilteredChats(prev => prev.filter(c => c.id !== id))
+      setClearedChats(prev => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
+    })
+    
+    return () => {
+      readSub.remove()
+      deletedSub.remove()
+    }
+  }, [])
+
+  // When cleared set changes, re-apply suppression to current lists
+  useEffect(() => {
+    if (clearedChats.size === 0) return
+    setChats(prev => prev.map(c => clearedChats.has(c.id) ? { ...c, unread_count: 0 } : c))
+    setFilteredChats(prev => prev.map(c => clearedChats.has(c.id) ? { ...c, unread_count: 0 } : c))
+  }, [clearedChats])
+
   // Keep list fresh when returning from detail
   useFocusEffect(
     React.useCallback(() => {
       if (isAuthenticated) {
         loadChats()
-        // Clear any cleared chats when returning to refresh unread counts
-        setClearedChats(new Set())
       }
     }, [isAuthenticated])
   )
@@ -79,7 +133,17 @@ export default function Chats() {
     try {
       setLoading(true)
       const userChats = await RealtimeChatService.getUserChats(user.id)
-      setChats(userChats)
+      // Sort by most recent activity (last_message_at desc)
+      const sorted = [...userChats].sort((a, b) => {
+        const at = a.last_message_at ? new Date(a.last_message_at).getTime() : 0
+        const bt = b.last_message_at ? new Date(b.last_message_at).getTime() : 0
+        return bt - at
+      })
+      // Apply client-side suppression for chats the user has opened
+      const suppressed = sorted.map(c =>
+        (clearedChats.has(c.id) ? { ...c, unread_count: 0 } : c)
+      )
+      setChats(suppressed)
     } catch (error) {
       console.error('Error loading chats:', error)
     } finally {
@@ -97,7 +161,11 @@ export default function Chats() {
     // Optimistically clear unread badge for immediate feedback
     setChats(prev => prev.map(c => c.id === chatId ? { ...c, unread_count: 0 } : c))
     setFilteredChats(prev => prev.map(c => c.id === chatId ? { ...c, unread_count: 0 } : c))
-    setClearedChats(prev => new Set([...Array.from(prev), chatId]))
+    setClearedChats(prev => {
+      const next = new Set([...Array.from(prev), chatId])
+      AsyncStorage.setItem(CLEARED_KEY, JSON.stringify(Array.from(next))).catch(() => {})
+      return next
+    })
     
     if (user?.id) {
       // Mark as read in background and refresh the chat list
@@ -165,6 +233,37 @@ export default function Chats() {
       <TouchableOpacity
         style={[styles.chatItem, hasUnread && styles.unreadChatItem]}
         onPress={() => handleChatSelect(item.id)}
+        onLongPress={() => {
+          Alert.alert(
+            'Delete conversation',
+            'This will delete all messages for this chat. Continue?',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Delete', style: 'destructive', onPress: async () => {
+                  try {
+                    const ok = await ChatService.deleteChatAndMessages(item.id, user?.id || '')
+                    if (ok) {
+                      // Emit event to notify other components
+                      DeviceEventEmitter.emit('chat:deleted', { chatId: item.id })
+                      setChats(prev => prev.filter(c => c.id !== item.id))
+                      setFilteredChats(prev => prev.filter(c => c.id !== item.id))
+                      setClearedChats(prev => {
+                        const next = new Set(prev)
+                        next.delete(item.id)
+                        return next
+                      })
+                    } else {
+                      Alert.alert('Error', 'Failed to delete chat. Please try again.')
+                    }
+                  } catch (e) {
+                    console.error('Delete chat failed', e)
+                    Alert.alert('Error', 'Failed to delete chat. Please try again.')
+                  }
+                }
+              }
+            ]
+          )
+        }}
         activeOpacity={0.7}
       >
         <View style={styles.avatarContainer}>
@@ -248,15 +347,7 @@ export default function Chats() {
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerContent}>
-          <View>
-            <Text style={styles.headerTitle}>Messages</Text>
-            <Text style={styles.headerSubtitle}>
-              {chats.length} conversation{chats.length !== 1 ? 's' : ''}
-            </Text>
-          </View>
-          <TouchableOpacity style={styles.searchButton}>
-            <Ionicons name="search" size={24} color={Colors.neutral[600]} />
-          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Messages</Text>
         </View>
         
         {/* Search Bar */}
@@ -282,9 +373,7 @@ export default function Chats() {
         <SkeletonList count={5} />
       ) : filteredChats.length === 0 ? (
         <View style={styles.emptyContainer}>
-          <View style={styles.emptyIcon}>
-            <Ionicons name="chatbubbles-outline" size={64} color={Colors.neutral[300]} />
-          </View>
+          <Ionicons name="chatbubbles-outline" size={64} color={Colors.neutral[300]} />
           <Text style={styles.emptyTitle}>
             {searchQuery ? 'No matching conversations' : 'No messages yet'}
           </Text>
@@ -316,9 +405,10 @@ export default function Chats() {
             />
           }
           showsVerticalScrollIndicator={false}
-          bounces={false}
-          alwaysBounceVertical={false}
-          overScrollMode="never"
+          bounces={true}
+          alwaysBounceVertical={true}
+          overScrollMode="always"
+          contentContainerStyle={{ ...styles.chatsListContent, paddingBottom: 120 }}
         />
       )}
     </View>
@@ -362,7 +452,7 @@ const styles = StyleSheet.create({
   header: {
     backgroundColor: Colors.background.primary,
     paddingHorizontal: 20,
-    paddingTop: 10,
+    paddingTop: 4,
     paddingBottom: 20,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border.light,
@@ -409,8 +499,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   chatsListContent: {
-    paddingTop: 8, // Small padding to prevent dragging from top safe area
-    paddingBottom: 20,
+    paddingTop: 0,
+    paddingBottom: 20, // Base padding, will be overridden to 120 in contentContainerStyle
   },
   chatItem: {
     flexDirection: 'row',
@@ -518,40 +608,28 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 40,
-    backgroundColor: Colors.background.primary,
-  },
-  emptyIcon: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: Colors.neutral[50],
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 24,
+    paddingVertical: 60,
   },
   emptyTitle: {
-    fontSize: 22,
+    fontSize: 18,
     fontWeight: '600',
-    color: Colors.neutral[700],
-    marginBottom: 12,
-    textAlign: 'center',
+    color: Colors.neutral[600],
+    marginTop: 16,
+    marginBottom: 8,
   },
   emptySubtitle: {
-    fontSize: 16,
+    fontSize: 14,
     color: Colors.neutral[500],
     textAlign: 'center',
-    lineHeight: 24,
-    marginBottom: 24,
+    paddingHorizontal: 40,
   },
   browseButton: {
     backgroundColor: Colors.primary[500],
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 25,
+    marginTop: 16,
   },
   browseButtonText: {
     color: '#fff',

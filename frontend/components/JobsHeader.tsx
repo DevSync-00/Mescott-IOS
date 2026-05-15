@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  SafeAreaView,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
@@ -24,39 +23,34 @@ export default function JobsHeader({
   createTaskText
 }: JobsHeaderProps) {
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
-      <View style={styles.header}>
-        <View style={styles.headerContent}>
-          <View style={styles.headerText}>
-            <Text style={styles.title}>{title}</Text>
-            <Text style={styles.subtitle}>{subtitle}</Text>
-          </View>
-          <View style={styles.headerActions}>
-            <TouchableOpacity 
-              style={styles.createTaskButton}
-              onPress={onCreateTask}
-            >
-              <Ionicons name="add" size={20} color="#fff" />
-              <Text style={styles.createTaskText}>{createTaskText}</Text>
-            </TouchableOpacity>
-          </View>
+    <View style={styles.header}>
+      <View style={styles.headerContent}>
+        <View style={styles.headerText}>
+          <Text style={styles.title}>{title}</Text>
+          {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
+        </View>
+        <View style={styles.headerActions}>
+          <TouchableOpacity 
+            style={styles.createTaskButton}
+            onPress={onCreateTask}
+          >
+            <Ionicons name="add" size={20} color="#fff" />
+            <Text style={styles.createTaskText}>{createTaskText}</Text>
+          </TouchableOpacity>
         </View>
       </View>
-    </SafeAreaView>
+    </View>
   )
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    backgroundColor: Colors.background.primary,
-  },
   header: {
     backgroundColor: Colors.background.primary,
     paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 24,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
+    paddingTop: 8,
+    paddingBottom: 16,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -66,7 +60,7 @@ const styles = StyleSheet.create({
   headerContent: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   headerText: {
     flex: 1,
@@ -92,7 +86,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary[500],
     paddingHorizontal: 16,
     paddingVertical: 10,
-    borderRadius: 12,
+    borderRadius: 10,
     gap: 6,
   },
   createTaskText: {

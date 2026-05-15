@@ -41,3 +41,4 @@ config.serializer = {
 };
 
 module.exports = config;
+

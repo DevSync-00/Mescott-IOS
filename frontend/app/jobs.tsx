@@ -1,17 +1,19 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  SafeAreaView,
   TextInput,
   Alert,
   ActivityIndicator,
   Dimensions,
   Image,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter, useFocusEffect } from 'expo-router'
 import { useAuth } from '../contexts/SimpleAuthContext'
@@ -28,10 +30,11 @@ import ChapaPaymentModal from '../components/ChapaPaymentModal'
 import JobsHeader from '../components/JobsHeader'
 import Colors from '../constants/Colors'
 import SkeletonLoader, { SkeletonList } from '../components/SkeletonLoader'
+import TaskDetailSheet from '../components/TaskDetailSheet'
 
 const { width } = Dimensions.get('window')
 
-const categories = ['All', 'Cleaning', 'Handyman', 'Delivery', 'Photography', 'Technology', 'Gardening', 'Moving', 'Pet Care', 'Tutoring', 'Cooking', 'Painting', 'Plumbing', 'Electrical', 'Carpentry', 'Event Planning']
+const categories = ['All', 'General', 'Cleaning', 'Handyman', 'Delivery', 'Photography', 'Technology', 'Gardening', 'Moving', 'Pet Care', 'Tutoring', 'Cooking', 'Painting', 'Plumbing', 'Electrical', 'Carpentry', 'Event Planning']
 
 const budgetRanges = [
   { label: 'jobs.any_budget', min: 0, max: Infinity },
@@ -77,6 +80,8 @@ export default function Jobs() {
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [showRatingModal, setShowRatingModal] = useState(false)
   const [selectedTaskForRating, setSelectedTaskForRating] = useState<Task | null>(null)
+  const [detailVisible, setDetailVisible] = useState(false)
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -86,6 +91,8 @@ export default function Jobs() {
 
   useEffect(() => {
     if (isAuthenticated) {
+      // Reset category filter when switching tabs
+      setSelectedCategory('All')
       loadTasks()
       loadPendingPayments()
     }
@@ -106,8 +113,7 @@ export default function Jobs() {
     return (
       <View style={styles.container}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary[500]} />
-          <Text style={styles.loadingText}>Loading...</Text>
+          <SkeletonList count={3} />
         </View>
       </View>
     )
@@ -370,190 +376,77 @@ export default function Jobs() {
     }
   }
 
+    const scrollViewRef = useRef<ScrollView>(null)
+
     return (
-      <View style={styles.container}>
-        {/* Header */}
+      <SafeAreaView style={styles.container} edges={['bottom']}>
+        {/* Fixed Header (does not scroll) */}
         <JobsHeader
-          title={activeTab === 'available' ? t('jobs.available') : t('jobs.my_tasks')}
-          subtitle={user ? `Hi ${user.name.split(' ')[0]}!` : 'Find your next job'}
-          onCreateTask={() => router.push('/post-task')}
-          createTaskText={t('jobs.create_task')}
-        />
-
-        {/* Tab Navigation */}
-        <View style={styles.tabContainer}>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'available' && styles.activeTab]}
-            onPress={() => setActiveTab('available')}
-          >
-            <Text style={[styles.tabText, activeTab === 'available' && styles.activeTabText]}>
-              Available
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'my' && styles.activeTab]}
-            onPress={() => setActiveTab('my')}
-          >
-            <Text style={[styles.tabText, activeTab === 'my' && styles.activeTabText]}>
-              My Tasks
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Search Bar */}
-        <View style={styles.searchContainer}>
-          <Ionicons name="search" size={20} color={Colors.neutral[400]} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder={t('jobs.search')}
-            placeholderTextColor={Colors.neutral[400]}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            onSubmitEditing={handleSearch}
-            returnKeyType="search"
+            title={activeTab === 'available' ? t('jobs.available') : t('jobs.my_tasks')}
+            subtitle=""
+            onCreateTask={() => router.push({ pathname: '/post-task' })}
+            createTaskText={t('jobs.create_task')}
           />
-          <TouchableOpacity 
-            style={styles.filterButton}
-            onPress={() => setShowAdvancedSearch(true)}
+
+        {/* Fixed Controls: Tabs + Category chips */}
+        <View style={styles.headerControls}>
+          {/* Tab Navigation (fixed) */}
+          <View style={styles.tabContainer}>
+            <TouchableOpacity
+              style={[styles.tab, activeTab === 'available' && styles.activeTab]}
+              onPress={() => setActiveTab('available')}
+            >
+              <Text style={[styles.tabText, activeTab === 'available' && styles.activeTabText]}>
+                Available
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tab, activeTab === 'my' && styles.activeTab]}
+              onPress={() => setActiveTab('my')}
+            >
+              <Text style={[styles.tabText, activeTab === 'my' && styles.activeTabText]}>
+                My Tasks
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Category Chips (fixed; for both Available and My Tasks) */}
+          <ScrollView 
+            horizontal 
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.headerChipsScroll}
+            bounces={false}
+            alwaysBounceVertical={false}
+            overScrollMode="never"
           >
-            <Ionicons name="search-outline" size={20} color={Colors.primary[500]} />
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={styles.filterButton}
-            onPress={() => setShowFilters(!showFilters)}
-          >
-            <Ionicons name="options-outline" size={20} color={Colors.primary[500]} />
-            {showFilters && <View style={styles.filterBadge} />}
-          </TouchableOpacity>
+            {categories.map((category) => (
+              <TouchableOpacity
+                key={category}
+                style={[styles.filterChip, selectedCategory === category && styles.filterChipActive]}
+                onPress={() => setSelectedCategory(category)}
+              >
+                <Text style={[styles.filterChipText, selectedCategory === category && styles.filterChipTextActive]}>
+                  {category}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         </View>
 
-        {/* Enhanced Filter Panel */}
-        {showFilters && (
-          <View style={styles.filterPanel}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll} bounces={false} alwaysBounceVertical={false} overScrollMode="never">
-              {/* Budget Range Filter */}
-              <View style={styles.filterSection}>
-                <Text style={styles.filterLabel}>{t('jobs.budget_range')}</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} bounces={false} alwaysBounceVertical={false} overScrollMode="never">
-                  {budgetRanges.map((range, index) => (
-                    <TouchableOpacity
-                      key={index}
-                      style={[
-                        styles.filterChip,
-                        selectedBudgetRange === index && styles.filterChipActive
-                      ]}
-                      onPress={() => setSelectedBudgetRange(index)}
-                    >
-                      <Text style={[
-                        styles.filterChipText,
-                        selectedBudgetRange === index && styles.filterChipTextActive
-                      ]}>
-                        {t(range.label)}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
+        {/* Scrollable content below header */}
+        <ScrollView
+          ref={scrollViewRef}
+          style={styles.content}
+          contentContainerStyle={{ paddingBottom: 120 }}
+          bounces={true}
+          alwaysBounceVertical={true}
+          showsVerticalScrollIndicator={false}
+          overScrollMode="always"
+          scrollEventThrottle={16}
+        >
+        {/* Tabs moved to fixed header */}
 
-              {/* Sort Options */}
-              <View style={styles.filterSection}>
-                <Text style={styles.filterLabel}>Sort By</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} bounces={false} alwaysBounceVertical={false} overScrollMode="never">
-                  {sortOptions.map((option) => (
-                    <TouchableOpacity
-                      key={option.value}
-                      style={[
-                        styles.filterChip,
-                        selectedSort === option.value && styles.filterChipActive
-                      ]}
-                      onPress={() => setSelectedSort(option.value)}
-                    >
-                      <Text style={[
-                        styles.filterChipText,
-                        selectedSort === option.value && styles.filterChipTextActive
-                      ]}>
-                        {option.label}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-
-              {/* Date Filter */}
-              <View style={styles.filterSection}>
-                <Text style={styles.filterLabel}>Date</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} bounces={false} alwaysBounceVertical={false} overScrollMode="never">
-                  {[
-                    { label: 'Any Date', value: 'any' },
-                    { label: 'Today', value: 'today' },
-                    { label: 'Tomorrow', value: 'tomorrow' },
-                    { label: 'This Week', value: 'this_week' }
-                  ].map((option) => (
-                    <TouchableOpacity
-                      key={option.value}
-                      style={[
-                        styles.filterChip,
-                        selectedDate === option.value && styles.filterChipActive
-                      ]}
-                      onPress={() => setSelectedDate(option.value)}
-                    >
-                      <Text style={[
-                        styles.filterChipText,
-                        selectedDate === option.value && styles.filterChipTextActive
-                      ]}>
-                        {option.label}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-
-              {/* Urgency Filter */}
-              <View style={styles.filterSection}>
-                <Text style={styles.filterLabel}>Urgency</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} bounces={false} alwaysBounceVertical={false} overScrollMode="never">
-                  {[
-                    { label: 'Any', value: 'any' },
-                    { label: 'Urgent', value: 'urgent' },
-                    { label: 'Within Week', value: 'within_week' },
-                    { label: 'Flexible', value: 'flexible' }
-                  ].map((option) => (
-                    <TouchableOpacity
-                      key={option.value}
-                      style={[
-                        styles.filterChip,
-                        selectedUrgency === option.value && styles.filterChipActive
-                      ]}
-                      onPress={() => setSelectedUrgency(option.value)}
-                    >
-                      <Text style={[
-                        styles.filterChipText,
-                        selectedUrgency === option.value && styles.filterChipTextActive
-                      ]}>
-                        {option.label}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-
-              {/* Clear Filters */}
-              <TouchableOpacity
-                style={styles.clearFiltersButton}
-                onPress={() => {
-                  setSelectedBudgetRange(0)
-                  setSelectedSort('newest')
-                  setSelectedDate('any')
-                  setSelectedUrgency('any')
-                  setSelectedLocation('any')
-                }}
-              >
-                <Ionicons name="refresh" size={16} color={Colors.primary[500]} />
-                <Text style={styles.clearFiltersText}>Clear All</Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
-        )}
+        {/* Search and advanced filters removed for this version */}
 
         {/* Tasker Registration Prompt */}
         {user && user.role !== 'tasker' && user.role !== 'both' && user.tasker_application_status !== 'pending' && activeTab === 'available' && (
@@ -574,37 +467,7 @@ export default function Jobs() {
           </View>
         )}
 
-      {/* Category Filters */}
-      {activeTab === 'available' && (
-        <View style={styles.filtersSection}>
-          <ScrollView 
-            horizontal 
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.filtersScroll}
-            bounces={false}
-            alwaysBounceVertical={false}
-            overScrollMode="never"
-          >
-            {categories.map((category) => (
-          <TouchableOpacity
-                key={category}
-            style={[
-                  styles.filterChip,
-                  selectedCategory === category && styles.filterChipActive
-            ]}
-                onPress={() => setSelectedCategory(category)}
-          >
-            <Text style={[
-                  styles.filterChipText,
-                  selectedCategory === category && styles.filterChipTextActive
-            ]}>
-                  {category}
-            </Text>
-          </TouchableOpacity>
-            ))}
-          </ScrollView>
-        </View>
-      )}
+      {/* Category chips moved to fixed header */}
 
       {/* Tasks List */}
       <ScrollView 
@@ -641,10 +504,7 @@ export default function Jobs() {
             <TouchableOpacity 
               key={task.id} 
               style={styles.taskCard}
-              onPress={() => router.push({
-                pathname: '/task-detail',
-                params: { taskId: task.id }
-              })}
+              onPress={() => { setSelectedTaskId(task.id); setDetailVisible(true) }}
             >
               {/* Task Image */}
         {task.photos && task.photos.length > 0 && (
@@ -654,22 +514,14 @@ export default function Jobs() {
               style={styles.taskImage}
               resizeMode="cover"
             />
-            {/* Image overlay with icons */}
-            <View style={styles.imageOverlay}>
+            {/* Image overlay with photo count */}
               {task.photos.length > 1 && (
+              <View style={styles.imageOverlay}>
                 <View style={styles.imageCountBadge}>
                   <Text style={styles.imageCountText}>+{task.photos.length - 1}</Text>
                 </View>
+                </View>
               )}
-              <View style={styles.imageActions}>
-                <TouchableOpacity style={styles.imageActionButton}>
-                  <Ionicons name="heart-outline" size={18} color="#fff" />
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.imageActionButton}>
-                  <Ionicons name="chatbubble-outline" size={18} color="#fff" />
-                </TouchableOpacity>
-              </View>
-            </View>
           </View>
         )}
 
@@ -795,7 +647,7 @@ export default function Jobs() {
                       ) : (
                         <View style={styles.completedBadge}>
                           <Ionicons name="checkmark-circle" size={16} color={Colors.success[500]} />
-                          <Text style={styles.completedText}>Completed & Paid</Text>
+                          <Text style={styles.completedText}>Paid</Text>
                         </View>
                       )
                     ) : task.tasker_id ? (
@@ -857,10 +709,11 @@ export default function Jobs() {
             ))}
           </>
         )}
-      </ScrollView>
+          </ScrollView>
+        </ScrollView>
 
-      {/* Advanced Search Modal */}
-      <AdvancedSearch
+        {/* Advanced Search Modal */}
+        <AdvancedSearch
         visible={showAdvancedSearch}
         onClose={() => setShowAdvancedSearch(false)}
         onSearch={handleAdvancedSearch}
@@ -907,14 +760,54 @@ export default function Jobs() {
           technicianName={selectedTaskForRating.tasker_name || 'Technician'}
         />
       )} */}
-    </View>
-  )
+
+      {/* Task Detail Sheet */}
+      {selectedTaskId && (
+        <TaskDetailSheet
+          visible={detailVisible}
+          onClose={() => setDetailVisible(false)}
+          taskId={selectedTaskId}
+          onPaymentSuccess={handlePaymentSuccess}
+          onRatingSubmitted={handleRatingSubmitted}
+          hasPendingPayment={hasPendingPayment}
+          user={user}
+          pendingPayments={pendingPayments}
+          handlePayNow={handlePayNow}
+          handleApplyToTask={handleApplyToTask}
+          appliedTasks={appliedTasks}
+          getStatusColor={getStatusColor}
+          getStatusLabel={getStatusLabel}
+          formatTime={formatTime}
+          t={t}
+          router={router}
+          setSelectedTaskId={setSelectedTaskId}
+          setDetailVisible={setDetailVisible}
+        />
+      )}
+        <TaskDetailSheet
+          taskId={selectedTaskId || undefined}
+          visible={detailVisible}
+          onClose={() => { setDetailVisible(false); setSelectedTaskId(null) }}
+        />
+      </SafeAreaView>
+    )
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FAFAFA', // Very light gray background for scrollable content
+  },
+  content: {
+    flex: 1,
+  },
+  headerControls: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border.light,
   },
   notificationButton: {
     width: 44,
@@ -946,7 +839,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
     marginHorizontal: 16,
-    marginTop: 16, // Add spacing between tabs and search
+    marginTop: 12, // spacing between tabs and search
+    marginBottom: 12, // breathing room below search
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderRadius: 12,
@@ -966,9 +860,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     backgroundColor: '#FFFFFF',
     marginHorizontal: 16,
-    marginTop: 16, // Add spacing between header and tabs
-    borderRadius: 12,
-    padding: 4,
+    marginTop: 8,
+    marginBottom: 12, // a touch more breathing room before category chips
+    borderRadius: 10, // slightly reduced roundness
+    paddingVertical: 4,
+    paddingHorizontal: 4,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
@@ -1002,6 +898,10 @@ const styles = StyleSheet.create({
   },
   filtersScroll: {
     paddingHorizontal: 20,
+  },
+  headerChipsScroll: {
+    paddingHorizontal: 16,
+    paddingBottom: 4,
   },
   filterChip: {
     paddingHorizontal: 16,
@@ -1082,7 +982,8 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingTop: 16, // Add spacing between tab section and first task card
-    paddingBottom: 20,
+    paddingBottom: 120, // Increased padding to prevent content cutoff
+    flexGrow: 1, // Ensure content can grow to fill available space
   },
   loadingContainer: {
     alignItems: 'center',
@@ -1134,26 +1035,8 @@ const styles = StyleSheet.create({
   },
   imageOverlay: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.1)',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    padding: 8,
-  },
-  imageActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  imageActionButton: {
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    borderRadius: 20,
-    padding: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
+    top: 8,
+    right: 8,
   },
   taskHeader: {
     flexDirection: 'row',

@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router'
 import { useNotifications } from '../contexts/NotificationContext'
 import { useAuth } from '../contexts/SimpleAuthContext'
 import Colors from '../constants/Colors'
+import SkeletonLoader, { SkeletonList } from '../components/SkeletonLoader'
 import Header from '../components/Header'
 
 export default function Notifications() {
@@ -143,8 +144,7 @@ export default function Notifications() {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary[500]} />
-          <Text style={styles.loadingText}>Loading...</Text>
+          <SkeletonList count={3} />
         </View>
       </SafeAreaView>
     )
@@ -174,8 +174,7 @@ export default function Notifications() {
       >
         {loading ? (
           <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={Colors.primary[500]} />
-            <Text style={styles.loadingText}>Loading notifications...</Text>
+            <SkeletonList count={3} />
           </View>
         ) : notifications.length === 0 ? (
           <View style={styles.emptyContainer}>

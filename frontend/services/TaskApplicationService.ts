@@ -320,10 +320,11 @@ export class TaskApplicationService {
       if (updateTaskResult.error) throw updateTaskResult.error
       if (rejectOthersResult.error) throw rejectOthersResult.error
 
-      // Execute notifications and chat creation in parallel (non-blocking)
+      // Execute notifications and chat creation in parallel (non-blocking, fire-and-forget)
+      // Pass task data we already have to avoid re-fetching
       Promise.all([
-        // Create chat between customer and tasker
-        this.createChatForAcceptedApplication(application.task_id, application.tasker_id),
+        // Create chat between customer and tasker (optimized - uses data we already have)
+        this.createChatForAcceptedApplication(application.task_id, application.tasker_id, taskData.customer_id, taskData.title),
         
         // Send notifications
         this.sendAcceptanceNotifications(application.task_id, application.tasker_id, taskData.title, taskData.customer_id)
@@ -332,9 +333,7 @@ export class TaskApplicationService {
         // Don't fail the main operation if notifications fail
       })
 
-      // Also create chat synchronously to ensure it's available immediately
-      await this.createChatForAcceptedApplication(application.task_id, application.tasker_id)
-
+      // Return immediately - chat creation happens in background
       return true
     } catch (error) {
       console.error('Error accepting application:', error)
@@ -401,36 +400,48 @@ export class TaskApplicationService {
   }
 
   // Create a chat when an application is accepted
-  static async createChatForAcceptedApplication(taskId: string, taskerId: string): Promise<void> {
+  // Optimized: accepts customerId and title to avoid re-fetching task data
+  static async createChatForAcceptedApplication(taskId: string, taskerId: string, customerId?: string, taskTitle?: string): Promise<void> {
     try {
-      // Get task details to find customer
-      const { data: task, error: taskError } = await supabase
-        .from('tasks')
-        .select('customer_id, title')
-        .eq('id', taskId)
-        .single()
+      // If customerId not provided, fetch it (backward compatibility)
+      let customer = customerId
+      let title = taskTitle
+      
+      if (!customer || !title) {
+        const { data: task, error: taskError } = await supabase
+          .from('tasks')
+          .select('customer_id, title')
+          .eq('id', taskId)
+          .single()
 
-      if (taskError || !task) {
-        console.error('Error getting task details:', taskError)
-        return
+        if (taskError || !task) {
+          console.error('Error getting task details:', taskError)
+          return
+        }
+        
+        customer = task.customer_id
+        title = task.title
       }
 
       // Import ChatService dynamically to avoid circular imports
       const { ChatService } = await import('./ChatService')
       
       // Create chat between customer and tasker
-      const chat = await ChatService.getOrCreateChat(taskId, task.customer_id, taskerId)
+      const chat = await ChatService.getOrCreateChat(taskId, customer, taskerId)
       
       if (chat) {
         console.log('Chat created successfully for accepted application')
         
-        // Send initial welcome message
-        await ChatService.sendMessage(
+        // Send initial welcome message (non-blocking)
+        ChatService.sendMessage(
           chat.id,
-          task.customer_id,
-          `Great! I've accepted your application for "${task.title}". Let's discuss the details!`,
+          customer,
+          `Great! I've accepted your application for "${title}". Let's discuss the details!`,
           'text'
-        )
+        ).catch(error => {
+          console.error('Error sending welcome message:', error)
+          // Don't fail chat creation if message fails
+        })
       } else {
         console.error('Failed to create chat for accepted application')
       }

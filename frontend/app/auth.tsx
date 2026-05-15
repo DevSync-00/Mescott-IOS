@@ -97,20 +97,23 @@ export default function Auth() {
       return
     }
 
+    console.log('📲 AUTH SCREEN - Requesting OTP for:', formattedPhone, 'at', new Date().toISOString())
     setLoading(true)
     
     try {
       const result = await sendVerificationCode(formattedPhone, isSignUp, fullName, username)
       
       if (result.success) {
+        console.log('✅ AUTH SCREEN - OTP sent successfully at', new Date().toISOString())
         Alert.alert('Success', result.message)
         setIsCodeSent(true)
         startCountdown()
       } else {
+        console.error('❌ AUTH SCREEN - Failed to send OTP:', result.message)
         Alert.alert('Error', result.message)
       }
     } catch (error: any) {
-      console.error('Exception in handleSendCode:', error);
+      console.error('❌ AUTH SCREEN - Exception in handleSendCode:', error);
       Alert.alert('Error', error.message || 'Failed to send verification code. Please try again.')
     } finally {
       setLoading(false)
@@ -123,12 +126,21 @@ export default function Auth() {
       return
     }
 
+    const formattedPhone = cleanPhoneNumber(phoneNumber)
+    console.log('🔍 AUTH SCREEN - Attempting verification:', {
+      phone: formattedPhone,
+      code: verificationCode,
+      codeLength: verificationCode.length,
+      timestamp: new Date().toISOString(),
+      countdownRemaining: countdown
+    })
+
     setLoading(true)
     try {
-      const formattedPhone = cleanPhoneNumber(phoneNumber)
       const result = await verifyPhoneCode(formattedPhone, verificationCode)
       
       if (result.success) {
+        console.log('✅ AUTH SCREEN - Verification successful at', new Date().toISOString())
         Alert.alert('Success', result.message)
         
         // Reset form state
@@ -139,9 +151,11 @@ export default function Auth() {
         setUsername('')
         // Navigation will be handled by the layout redirect
       } else {
+        console.error('❌ AUTH SCREEN - Verification failed:', result.message)
         Alert.alert('Error', result.message)
       }
     } catch (error: any) {
+      console.error('❌ AUTH SCREEN - Exception in handleVerifyCode:', error)
       Alert.alert('Error', error.message || 'Verification failed. Please try again.')
     } finally {
       setLoading(false)
@@ -183,17 +197,17 @@ export default function Auth() {
               {/* Header */}
               <View style={styles.header}>
                 <View style={styles.iconContainer}>
-                  <Ionicons name="phone-portrait" size={48} color={Colors.primary[500]} />
+                  <Ionicons name="phone-portrait" size={40} color="#FFFFFF" />
                 </View>
                 <Text style={styles.title}>
-                  {isSignUp ? 'Create Account' : 'Sign In'}
+                  {isSignUp ? 'Create Account' : 'Welcome Back'}
                 </Text>
                 <Text style={styles.subtitle}>
                   {isCodeSent
                     ? `Enter the 6-digit code sent to ${phoneNumber}`
                     : isSignUp 
                       ? 'Enter your details to get started'
-                      : 'Enter your phone number to sign in'}
+                      : 'Sign in to continue to your account'}
                 </Text>
               </View>
 
@@ -227,11 +241,11 @@ export default function Auth() {
                     {isSignUp && (
                       <>
                         <View style={styles.inputContainer}>
-                          <Ionicons name="person" size={20} color={Colors.primary[500]} />
+                          <Ionicons name="person-outline" size={20} color="#6F4685" />
                           <TextInput
                             style={styles.input}
-                            placeholder="Enter your full name"
-                            placeholderTextColor={Colors.neutral[400]}
+                            placeholder="Full name"
+                            placeholderTextColor="#AAAAAA"
                             value={fullName}
                             onChangeText={setFullName}
                             autoFocus
@@ -240,11 +254,11 @@ export default function Auth() {
                         </View>
 
                         <View style={styles.inputContainer}>
-                          <Ionicons name="at" size={20} color={Colors.primary[500]} />
+                          <Ionicons name="at" size={20} color="#6F4685" />
                           <TextInput
                             style={styles.input}
-                            placeholder="Enter username"
-                            placeholderTextColor={Colors.neutral[400]}
+                            placeholder="Username"
+                            placeholderTextColor="#AAAAAA"
                             value={username}
                             onChangeText={setUsername}
                             returnKeyType="next"
@@ -254,11 +268,11 @@ export default function Auth() {
                     )}
 
                     <View style={styles.inputContainer}>
-                      <Ionicons name="call" size={20} color={Colors.primary[500]} />
+                      <Ionicons name="call-outline" size={20} color="#6F4685" />
                       <TextInput
                         style={styles.input}
-                        placeholder="Enter phone number"
-                        placeholderTextColor={Colors.neutral[400]}
+                        placeholder="Phone number"
+                        placeholderTextColor="#AAAAAA"
                         value={phoneNumber}
                         onChangeText={setPhoneNumber}
                         keyboardType="phone-pad"
@@ -275,13 +289,12 @@ export default function Auth() {
                       onPress={handleSendCode}
                       disabled={loading}
                     >
-                      <Ionicons name="send" size={20} color="#fff" />
                       <Text style={styles.buttonText}>
                         {loading 
-                          ? 'Sending Code...' 
+                          ? 'Sending...' 
                           : isSignUp 
-                            ? 'Send Verification Code' 
-                            : 'Sign In'
+                            ? 'Continue' 
+                            : 'Continue'
                         }
                       </Text>
                     </TouchableOpacity>
@@ -295,16 +308,16 @@ export default function Auth() {
                         setVerificationCode('')
                       }}
                     >
-                      <Ionicons name="arrow-back" size={20} color={Colors.primary[500]} />
+                      <Ionicons name="arrow-back" size={20} color="#6F4685" />
                       <Text style={styles.backToPhoneText}>Change phone number</Text>
                     </TouchableOpacity>
 
                     <View style={styles.inputContainer}>
-                      <Ionicons name="keypad" size={20} color={Colors.primary[500]} />
+                      <Ionicons name="lock-closed-outline" size={20} color="#6F4685" />
                       <TextInput
                         style={styles.input}
-                        placeholder="Enter verification code"
-                        placeholderTextColor={Colors.neutral[400]}
+                        placeholder="6-digit code"
+                        placeholderTextColor="#AAAAAA"
                         value={verificationCode}
                         onChangeText={setVerificationCode}
                         keyboardType="number-pad"
@@ -320,9 +333,8 @@ export default function Auth() {
                       onPress={handleVerifyCode}
                       disabled={loading}
                     >
-                      <Ionicons name="checkmark-circle" size={20} color="#fff" />
                       <Text style={styles.buttonText}>
-                        {loading ? 'Verifying...' : 'Verify Code'}
+                        {loading ? 'Verifying...' : 'Verify & Continue'}
                       </Text>
                     </TouchableOpacity>
 
@@ -360,146 +372,128 @@ export default function Auth() {
   )
 }
 
+const SECONDARY_COLOR = '#6F4685'
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.background.primary,
+    backgroundColor: '#FFFFFF',
   },
   background: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 24,
   },
   keyboardView: {
     flex: 1,
     width: '100%',
     justifyContent: 'center',
-    alignItems: 'center',
   },
   content: {
     width: '100%',
-    maxWidth: 400,
-    backgroundColor: Colors.background.secondary,
-    borderRadius: 24,
-    padding: 32,
+    maxWidth: 420,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 12,
-    borderWidth: 1,
-    borderColor: Colors.border.light,
   },
   header: {
     alignItems: 'center',
-    marginBottom: 32,
+    marginBottom: 48,
   },
   iconContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: Colors.primary[100],
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: SECONDARY_COLOR,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 24,
   },
   title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: Colors.neutral[900],
-    marginBottom: 8,
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#1A1A1A',
+    marginBottom: 12,
     textAlign: 'center',
   },
   subtitle: {
-    fontSize: 16,
-    color: Colors.neutral[600],
+    fontSize: 15,
+    color: '#666666',
     textAlign: 'center',
     lineHeight: 22,
+    paddingHorizontal: 20,
   },
   devCodeContainer: {
-    backgroundColor: Colors.primary[50],
+    backgroundColor: '#F5F5F5',
     padding: 16,
     borderRadius: 12,
     marginBottom: 20,
-    borderWidth: 1,
-    borderColor: Colors.primary[200],
   },
   devCodeLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: Colors.primary[700],
+    color: SECONDARY_COLOR,
     marginBottom: 8,
     textAlign: 'center',
   },
   devCode: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: Colors.primary[900],
+    color: SECONDARY_COLOR,
     textAlign: 'center',
     letterSpacing: 4,
   },
   form: {
     width: '100%',
-    marginBottom: 24,
+    marginBottom: 32,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.background.primary,
-    borderRadius: 16,
-    paddingHorizontal: 20,
-    marginBottom: 20,
-    height: 56,
-    borderWidth: 1,
-    borderColor: Colors.border.primary,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    marginBottom: 16,
+    height: 54,
+    borderWidth: 1.5,
+    borderColor: '#E5E5E5',
   },
   input: {
     flex: 1,
     fontSize: 16,
-    color: Colors.neutral[900],
+    color: '#1A1A1A',
     marginLeft: 12,
   },
   button: {
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Colors.primary[500],
+    backgroundColor: SECONDARY_COLOR,
     paddingVertical: 16,
-    borderRadius: 16,
-    gap: 8,
-    shadowColor: Colors.primary[500],
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 5,
+    borderRadius: 12,
+    marginTop: 8,
   },
   buttonDisabled: {
-    backgroundColor: Colors.neutral[300],
-    shadowOpacity: 0,
-    elevation: 0,
+    backgroundColor: '#CCCCCC',
   },
   buttonText: {
-    color: '#fff',
+    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
   },
   resendButton: {
-    marginTop: 16,
+    marginTop: 20,
     alignItems: 'center',
     paddingVertical: 8,
   },
   resendButtonDisabled: {
-    opacity: 0.6,
+    opacity: 0.5,
   },
   resendText: {
-    color: Colors.primary[500],
-    fontSize: 14,
+    color: SECONDARY_COLOR,
+    fontSize: 15,
     fontWeight: '500',
   },
   resendTextDisabled: {
-    color: Colors.neutral[400],
+    color: '#999999',
   },
   doneButton: {
     marginTop: 12,
@@ -507,60 +501,62 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   doneButtonText: {
-    color: Colors.neutral[600],
-    fontSize: 14,
+    color: '#666666',
+    fontSize: 15,
     fontWeight: '500',
   },
   footer: {
     alignItems: 'center',
+    paddingTop: 24,
   },
   footerText: {
-    fontSize: 12,
-    color: Colors.neutral[500],
+    fontSize: 13,
+    color: '#999999',
     textAlign: 'center',
-    lineHeight: 16,
+    lineHeight: 18,
   },
   authToggle: {
     flexDirection: 'row',
-    backgroundColor: Colors.neutral[100],
-    borderRadius: 12,
+    backgroundColor: '#F8F8F8',
+    borderRadius: 10,
     padding: 4,
-    marginBottom: 24,
+    marginBottom: 32,
+    width: '100%',
   },
   toggleButton: {
     flex: 1,
     paddingVertical: 12,
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
     borderRadius: 8,
     alignItems: 'center',
   },
   toggleButtonActive: {
-    backgroundColor: Colors.primary[500],
-    shadowColor: Colors.primary[500],
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.08,
     shadowRadius: 4,
-    elevation: 3,
+    elevation: 2,
   },
   toggleText: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
-    color: Colors.neutral[600],
+    color: '#999999',
   },
   toggleTextActive: {
-    color: '#fff',
+    color: SECONDARY_COLOR,
   },
   backToPhoneButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 12,
-    marginBottom: 20,
-    gap: 8,
+    marginBottom: 24,
+    gap: 6,
   },
   backToPhoneText: {
-    color: Colors.primary[500],
-    fontSize: 16,
+    color: SECONDARY_COLOR,
+    fontSize: 15,
     fontWeight: '500',
   },
 })

@@ -32,7 +32,7 @@ app.use((req, res, next) => {
 app.get('/', (req, res) => {
   res.json({
     success: true,
-    message: 'Muyacon Webhook Server is running!',
+    message: 'Mescott Webhook Server is running!',
     timestamp: new Date().toISOString(),
     environment: {
       supabase_url: process.env.SUPABASE_URL ? 'Set' : 'Not set',
@@ -241,7 +241,7 @@ app.post('/webhook', async (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`🚀 Muyacon Webhook Server running on port ${PORT}`);
+  console.log(`🚀 Mescott Webhook Server running on port ${PORT}`);
   console.log(`📍 Health check: http://localhost:${PORT}/`);
   console.log(`🔗 Webhook endpoint: http://localhost:${PORT}/webhook`);
 });

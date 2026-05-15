@@ -52,6 +52,11 @@ export interface Message {
 }
 
 export class ChatService {
+  // In-memory caches to avoid redundant network calls.
+  // NOTE: This resets on app restart; for persistence, consider MMKV/AsyncStorage.
+  private static profileCache: Map<string, { id: string; full_name: string; avatar_url: string | null; phone: string }> = new Map()
+  private static messageCache: Map<string, Message[]> = new Map()
+
   // Get all chats for a user
   static async getUserChats(userId: string): Promise<Chat[]> {
     try {
@@ -84,15 +89,13 @@ export class ChatService {
         throw error
       }
 
-      // Get unread counts for each chat
-      const chatsWithUnreadCounts = await Promise.all(
-        (data || []).map(async (chat) => {
-          const unreadCount = await this.getUnreadCount(chat.id, userId)
-          return { ...chat, unread_count: unreadCount }
-        })
-      )
+      const chats = data || []
 
-      return chatsWithUnreadCounts
+      // Fetch all unread counts in a single, batched query via RPC for performance
+      // Falls back to per-chat count if the RPC is not available.
+      const unreadMap = await this.getAllUnreadCounts(userId)
+
+      return chats.map(c => ({ ...c, unread_count: unreadMap.get(c.id) || 0 }))
     } catch (error) {
       console.error('Error getting user chats:', error)
       return []
@@ -181,6 +184,7 @@ export class ChatService {
     try {
       const { data, error } = await supabase
         .from('messages_new')
+        // Select only message fields; we'll batch-fetch senders to avoid N+1.
         .select('*')
         .eq('chat_id', chatId)
         .order('created_at', { ascending: false })
@@ -188,38 +192,68 @@ export class ChatService {
 
       if (error) throw error
       
-      // Get sender information separately
-      const messages = data || []
-      const messagesWithSenders = await Promise.all(
-        messages.map(async (message) => {
-          const { data: senderData } = await supabase
-            .from('profiles')
-            .select('id, full_name, avatar_url, phone')
-            .eq('id', message.sender_id)
-            .single()
-          
-          return {
-            ...message,
-            sender: senderData
-          }
-        })
-      )
-      
-      return messagesWithSenders.reverse() // Reverse to show oldest first
+      const messages = (data || []) as Message[]
+
+      // Attach sender details using profile cache with a single fetch for missing profiles
+      const uniqueSenderIds = Array.from(new Set(messages.map(m => m.sender_id)))
+      const missingSenderIds = uniqueSenderIds.filter(id => !this.profileCache.has(id))
+
+      if (missingSenderIds.length > 0) {
+        const { data: profilesData } = await supabase
+          .from('profiles')
+          .select('id, full_name, avatar_url, phone')
+          .in('id', missingSenderIds)
+
+        for (const p of (profilesData || [])) {
+          this.profileCache.set(p.id, p)
+        }
+      }
+
+      const messagesWithSenders = messages.map((m) => ({
+        ...m,
+        sender: this.profileCache.get(m.sender_id) || undefined
+      }))
+
+      // Update cache (store oldest-first for render ordering)
+      const ordered = [...messagesWithSenders].reverse()
+      this.messageCache.set(chatId, ordered)
+      return ordered
     } catch (error) {
       console.error('Error getting chat messages:', error)
       return []
     }
   }
 
+  // Return cached messages instantly if available; network refresh runs in background.
+  static async getChatMessagesFast(chatId: string, limit: number = 50, offset: number = 0): Promise<{ cached: Message[]; fresh: Promise<Message[]> }> {
+    const cached = this.messageCache.get(chatId) || []
+    const fresh = this.getChatMessages(chatId, limit, offset)
+    return { cached, fresh }
+  }
+
   // Send a message
   static async sendMessage(chatId: string, senderId: string, content: string, messageType: 'text' | 'image' | 'file' = 'text'): Promise<Message | null> {
     try {
+      // Enforce sender from active auth session to satisfy RLS policies on messages_new.
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+      if (authError || !authData?.user) {
+        console.error('Error resolving authenticated user for sendMessage:', authError)
+        return null
+      }
+
+      const effectiveSenderId = authData.user.id
+      if (senderId !== effectiveSenderId) {
+        console.warn('sendMessage senderId mismatch; using authenticated user id instead', {
+          passedSenderId: senderId,
+          effectiveSenderId
+        })
+      }
+
       const { data, error } = await supabase
         .from('messages_new')
         .insert({
           chat_id: chatId,
-          sender_id: senderId,
+          sender_id: effectiveSenderId,
           message: content,
           message_type: messageType
         })
@@ -230,12 +264,19 @@ export class ChatService {
         throw error
       }
 
-      // Get sender information
-      const { data: senderData } = await supabase
-        .from('profiles')
-        .select('id, full_name, avatar_url, phone')
-        .eq('id', senderId)
-        .single()
+      // Attach sender from cache or fetch once and cache
+      let senderData = this.profileCache.get(effectiveSenderId)
+      if (!senderData) {
+        const { data: fetched } = await supabase
+          .from('profiles')
+          .select('id, full_name, avatar_url, phone')
+          .eq('id', effectiveSenderId)
+          .single()
+        if (fetched) {
+          this.profileCache.set(fetched.id, fetched)
+          senderData = fetched
+        }
+      }
       
       const messageWithSender = {
         ...data,
@@ -243,7 +284,7 @@ export class ChatService {
       }
       
       // Update chat's last message info
-      await this.updateChatLastMessage(chatId, content, senderId)
+      await this.updateChatLastMessage(chatId, content, effectiveSenderId)
       
       // Send notification to the other participant
       try {
@@ -255,7 +296,7 @@ export class ChatService {
           .single()
 
         if (chatData) {
-          const receiverId = chatData.customer_id === senderId ? chatData.tasker_id : chatData.customer_id
+          const receiverId = chatData.customer_id === effectiveSenderId ? chatData.tasker_id : chatData.customer_id
           
           if (receiverId) {
             // Get sender name for notification
@@ -263,7 +304,7 @@ export class ChatService {
             
             await UnifiedNotificationService.notifyNewMessage(
               chatId,
-              senderId,
+              effectiveSenderId,
               receiverId,
               content,
               senderName
@@ -291,6 +332,7 @@ export class ChatService {
           is_read: true
         })
         .eq('chat_id', chatId)
+        .eq('is_read', false)
         .neq('sender_id', userId) // Don't mark own messages as read
 
       if (error) throw error
@@ -319,23 +361,58 @@ export class ChatService {
     }
   }
 
-  // Get total unread count for user
-  static async getTotalUnreadCount(userId: string): Promise<number> {
+  // Batched unread counts for all chats the user is part of.
+  static async getAllUnreadCounts(userId: string): Promise<Map<string, number>> {
+    try {
+      // Prefer server-side aggregation via RPC for performance on large datasets
+      const { data, error } = await supabase.rpc('get_unread_counts', { in_user_id: userId })
+      if (!error && Array.isArray(data)) {
+        const map = new Map<string, number>()
+        for (const row of data as Array<{ chat_id: string; unread_count: number }>) {
+          map.set(row.chat_id, row.unread_count)
+        }
+        return map
+      }
+    } catch (e) {
+      // Fallback below
+    }
+
+    // Fallback: fetch chat ids then one grouped query (less optimal, but keeps correctness)
     try {
       const { data: chats } = await supabase
         .from('chats')
         .select('id')
         .or(`customer_id.eq.${userId},tasker_id.eq.${userId}`)
 
-      if (!chats || chats.length === 0) return 0
+      const chatIds = (chats || []).map(c => c.id)
+      const result = new Map<string, number>()
+      if (chatIds.length === 0) return result
 
-      let totalUnread = 0
-      for (const chat of chats) {
-        const unreadCount = await this.getUnreadCount(chat.id, userId)
-        totalUnread += unreadCount
+      // Query unread messages for these chats; client-group since PostgREST group-by aliases are limited
+      const { data: unread } = await supabase
+        .from('messages_new')
+        .select('chat_id')
+        .in('chat_id', chatIds)
+        .eq('is_read', false)
+        .neq('sender_id', userId)
+
+      for (const row of (unread || [])) {
+        result.set(row.chat_id, (result.get(row.chat_id) || 0) + 1)
       }
+      return result
+    } catch (error) {
+      console.error('Error getting all unread counts (fallback):', error)
+      return new Map()
+    }
+  }
 
-      return totalUnread
+  // Get total unread count for user
+  static async getTotalUnreadCount(userId: string): Promise<number> {
+    try {
+      const unreadMap = await this.getAllUnreadCounts(userId)
+      let total = 0
+      unreadMap.forEach(v => { total += v })
+      return total
     } catch (error) {
       console.error('Error getting total unread count:', error)
       return 0
@@ -365,16 +442,48 @@ export class ChatService {
   // Delete a message (only sender can delete)
   static async deleteMessage(messageId: string, senderId: string): Promise<boolean> {
     try {
-      const { error } = await supabase
+      console.log('🗑️ Attempting to delete message:', messageId, 'for sender:', senderId)
+      
+      // First, get the chat_id before deletion for cache cleanup
+      const { data: messageData } = await supabase
         .from('messages_new')
-        .delete()
+        .select('chat_id')
         .eq('id', messageId)
         .eq('sender_id', senderId)
+        .single()
+      
+      // Use RPC function to delete message (bypasses RLS)
+      const { data, error } = await supabase.rpc('delete_message', {
+        in_message_id: messageId,
+        in_sender_id: senderId
+      })
 
-      if (error) throw error
-      return true
+      if (error) {
+        console.error('❌ Error deleting message:', error)
+        throw error
+      }
+      
+      const deleted = data === true
+      
+      if (deleted) {
+        console.log('✅ Message deleted successfully:', messageId)
+        // Clear from cache if it exists
+        if (messageData?.chat_id) {
+          const cachedMessages = this.messageCache.get(messageData.chat_id)
+          if (cachedMessages) {
+            this.messageCache.set(
+              messageData.chat_id,
+              cachedMessages.filter(m => m.id !== messageId)
+            )
+          }
+        }
+      } else {
+        console.warn('⚠️ Message deletion failed - message not found or user not authorized:', messageId)
+      }
+      
+      return deleted
     } catch (error) {
-      console.error('Error deleting message:', error)
+      console.error('❌ Error deleting message:', error)
       return false
     }
   }
@@ -423,6 +532,7 @@ export class ChatService {
   // Subscribe to chat for real-time updates (delegate to RealtimeChatService)
   static async subscribeToChat(chatId: string, callbacks: {
     onMessage: (message: any) => void
+    onMessageDeleted?: (messageId: string) => void
     onTyping?: (userId: string, isTyping: boolean) => void
     onUserOnline?: (userId: string, isOnline: boolean) => void
   }): Promise<any> {
@@ -445,31 +555,39 @@ export class ChatService {
   }
 
   // Delete chat and all messages (used when task is completed)
-  static async deleteChatAndMessages(chatId: string): Promise<boolean> {
+  static async deleteChatAndMessages(chatId: string, userId?: string): Promise<boolean> {
     try {
-      // First, delete all messages in the chat
-      const { error: messagesError } = await supabase
-        .from('messages_new')
-        .delete()
-        .eq('chat_id', chatId)
-
-      if (messagesError) {
-        throw messagesError
+      console.log('🗑️ Attempting to delete chat and messages:', chatId, 'for user:', userId)
+      
+      if (!userId) {
+        console.error('❌ User ID is required to delete chat')
+        return false
       }
 
-      // Then, delete the chat itself
-      const { error: chatError } = await supabase
-        .from('chats')
-        .delete()
-        .eq('id', chatId)
+      // Use RPC function to delete chat and messages (bypasses RLS, verifies user is participant)
+      const { data, error } = await supabase.rpc('delete_chat_and_messages', {
+        in_chat_id: chatId,
+        in_user_id: userId
+      })
 
-      if (chatError) {
-        throw chatError
+      if (error) {
+        console.error('❌ Error deleting chat and messages:', error)
+        throw error
       }
 
-      return true
+      const success = data === true
+      
+      if (success) {
+        console.log('✅ Chat and messages deleted successfully')
+        // Clear messages from cache
+        this.messageCache.delete(chatId)
+      } else {
+        console.warn('⚠️ Chat deletion failed - user not authorized or chat not found:', chatId)
+      }
+
+      return success
     } catch (error) {
-      console.error('Error deleting chat and messages:', error)
+      console.error('❌ Error deleting chat and messages:', error)
       return false
     }
   }

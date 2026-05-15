@@ -145,6 +145,7 @@ export default function ApplyTask() {
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={styles.scrollContent}
               bounces={true}
+              alwaysBounceVertical={true}
               scrollEventThrottle={16}
             >
               {/* Task Info */}

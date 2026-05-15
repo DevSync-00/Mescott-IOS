@@ -1,7 +1,7 @@
 @echo off
-REM Muyacon Webhook Server Deployment Script for Windows
+REM Mescott Webhook Server Deployment Script for Windows
 
-echo 🚀 Deploying Muyacon Webhook Server...
+echo 🚀 Deploying Mescott Webhook Server...
 
 REM Check if Vercel CLI is installed
 where vercel >nul 2>nul

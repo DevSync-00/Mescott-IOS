@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: muyacon-webhook
+    name: mescott-webhook
     env: node
     buildCommand: npm install
     startCommand: node api/payments/chapa/webhook.js

@@ -1,17 +1,23 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useRef, useState, useCallback } from 'react'
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  SafeAreaView,
   Alert,
   Image,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  ActivityIndicator,
 } from 'react-native'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { useAuth } from '../contexts/SimpleAuthContext'
+import { TaskService } from '../services/TaskService'
+import { RatingService } from '../services/RatingService'
+import { WalletService } from '../services/WalletService'
 import Colors from '../constants/Colors'
 import { supabase } from '../lib/supabase'
 import SkeletonLoader, { SkeletonCard } from '../components/SkeletonLoader'
@@ -19,12 +25,96 @@ import SkeletonLoader, { SkeletonCard } from '../components/SkeletonLoader'
 export default function Profile() {
   const { user, logout, switchMode, isAuthenticated, isLoading, refreshUserProfile } = useAuth()
   const router = useRouter()
+  const [stats, setStats] = useState({
+    tasksCompleted: 0,
+    rating: 0,
+    earned: 0,
+  })
+  const [loadingStats, setLoadingStats] = useState(true)
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
       router.replace('/auth')
     }
   }, [isAuthenticated, isLoading])
+
+  const formatCurrency = (amount: number): { symbol: string; number: string } => {
+    // Format as ETB (Ethiopian Birr)
+    const formatted = new Intl.NumberFormat('en-ET', {
+      style: 'currency',
+      currency: 'ETB',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(amount)
+    // Split the currency symbol and number
+    const parts = formatted.split(/\s+/)
+    return {
+      symbol: 'ETB',
+      number: parts[parts.length - 1] || formatted
+    }
+  }
+
+  const loadProfileStats = useCallback(async () => {
+    if (!user?.user_id) {
+      setLoadingStats(false)
+      return
+    }
+
+    try {
+      setLoadingStats(true)
+
+      // Get user's profile ID
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('user_id', user.user_id)
+        .maybeSingle()
+
+      if (!profile) {
+        setStats({ tasksCompleted: 0, rating: 0, earned: 0 })
+        setLoadingStats(false)
+        return
+      }
+
+      // Fetch stats in parallel
+      const [taskStats, rating, walletStats] = await Promise.all([
+        // Get tasks completed as tasker
+        supabase
+          .from('tasks')
+          .select('id, status, final_price')
+          .eq('tasker_id', profile.id)
+          .eq('status', 'completed'),
+        
+        // Get average rating as tasker
+        RatingService.getTechnicianAverageRating(profile.id),
+        
+        // Get wallet stats for earnings
+        WalletService.getWalletStats(user.user_id),
+      ])
+
+      const completedTasks = taskStats.data || []
+      const tasksCompleted = completedTasks.length
+      const averageRating = rating || 0
+      const totalEarnings = walletStats.totalEarnings || 0
+
+      setStats({
+        tasksCompleted,
+        rating: averageRating,
+        earned: totalEarnings,
+      })
+    } catch (error) {
+      console.error('Error loading profile stats:', error)
+      setStats({ tasksCompleted: 0, rating: 0, earned: 0 })
+    } finally {
+      setLoadingStats(false)
+    }
+  }, [user?.user_id])
+
+  useEffect(() => {
+    if (user && isAuthenticated) {
+      loadProfileStats()
+    }
+  }, [user, isAuthenticated, loadProfileStats])
 
   // Real-time subscription for profile updates
   useEffect(() => {
@@ -42,6 +132,7 @@ export default function Profile() {
         },
         (payload) => {
           refreshUserProfile()
+          loadProfileStats() // Refresh stats when profile updates
         }
       )
       .on(
@@ -54,6 +145,42 @@ export default function Profile() {
         },
         (payload) => {
           refreshUserProfile()
+          loadProfileStats() // Refresh stats when application updates
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'tasks',
+          filter: `tasker_id=eq.${user.id}`
+        },
+        (payload) => {
+          loadProfileStats() // Refresh stats when tasks update
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'ratings',
+        },
+        (payload) => {
+          loadProfileStats() // Refresh stats when ratings update
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'transactions',
+          filter: `user_id=eq.${user.user_id}`
+        },
+        (payload) => {
+          loadProfileStats() // Refresh stats when transactions update
         }
       )
       .subscribe()
@@ -61,13 +188,13 @@ export default function Profile() {
     return () => {
       subscription.unsubscribe()
     }
-  }, [user, refreshUserProfile])
+  }, [user, refreshUserProfile, loadProfileStats])
 
   // Show loading while auth is being determined
   if (isLoading) {
     return (
       <View style={styles.container}>
-        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} bounces={false} alwaysBounceVertical={false} overScrollMode="never">
+        <ScrollView style={styles.content} contentContainerStyle={styles.scrollContent} bounces={false} alwaysBounceVertical={false} overScrollMode="never">
           <SkeletonCard style={styles.profileSkeleton} />
           <SkeletonCard style={styles.statsSkeleton} />
           <SkeletonCard style={styles.actionsSkeleton} />
@@ -250,9 +377,11 @@ export default function Profile() {
     },
   ]
 
+  const scrollViewRef = useRef<ScrollView>(null)
+
   return (
-    <View style={styles.container}>
-      {/* Header */}
+    <SafeAreaView style={styles.container} edges={['bottom']}>
+      {/* Fixed Header */}
       <View style={styles.header}>
         <View style={styles.headerContent}>
           <Text style={styles.headerTitle}>Profile</Text>
@@ -263,14 +392,16 @@ export default function Profile() {
           </View>
         </View>
       </View>
-
-      <ScrollView 
-        style={styles.scrollView} 
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false} 
-        bounces={false} 
-        alwaysBounceVertical={false} 
-        overScrollMode="never"
+      {/* Scrollable content */}
+      <ScrollView
+        ref={scrollViewRef}
+        style={styles.content}
+        contentContainerStyle={{ paddingBottom: 120 }}
+        bounces={true}
+        alwaysBounceVertical={true}
+        showsVerticalScrollIndicator={false}
+        overScrollMode="always"
+        scrollEventThrottle={16}
       >
         {/* Profile Card */}
         <View style={styles.profileCard}>
@@ -309,17 +440,39 @@ export default function Profile() {
           {/* Stats */}
           <View style={styles.statsContainer}>
             <View style={styles.statItem}>
-              <Text style={styles.statNumber}>12</Text>
+              {loadingStats ? (
+                <ActivityIndicator size="small" color={Colors.primary[500]} />
+              ) : (
+                <Text style={styles.statNumber}>{stats.tasksCompleted}</Text>
+              )}
               <Text style={styles.statLabel}>Tasks Completed</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
-              <Text style={styles.statNumber}>4.8</Text>
+              {loadingStats ? (
+                <ActivityIndicator size="small" color={Colors.primary[500]} />
+              ) : (
+                <Text style={styles.statNumber}>
+                  {stats.rating > 0 ? stats.rating.toFixed(1) : '0.0'}
+                </Text>
+              )}
               <Text style={styles.statLabel}>Rating</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statItem}>
-              <Text style={styles.statNumber}>$1,250</Text>
+              {loadingStats ? (
+                <ActivityIndicator size="small" color={Colors.primary[500]} />
+              ) : (
+                (() => {
+                  const currency = formatCurrency(stats.earned)
+                  return (
+                    <View style={styles.currencyContainer}>
+                      <Text style={styles.currencySymbol}>{currency.symbol}</Text>
+                      <Text style={styles.statNumber}>{currency.number}</Text>
+                    </View>
+                  )
+                })()
+              )}
               <Text style={styles.statLabel}>Earned</Text>
             </View>
           </View>
@@ -422,7 +575,7 @@ export default function Profile() {
         {/* Bottom Spacing */}
         <View style={styles.bottomSpacing} />
       </ScrollView>
-    </View>
+    </SafeAreaView>
   )
 }
 
@@ -431,20 +584,21 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.background.secondary,
   },
-  scrollView: {
+  content: {
     flex: 1,
   },
   scrollContent: {
-    paddingTop: 8, // Small padding to prevent dragging from top safe area
-    paddingBottom: 20,
+    paddingTop: 0,
+    paddingBottom: 100, // Increased to prevent content cutoff
+    flexGrow: 1, // Ensure content can grow to fill available space
   },
   header: {
     backgroundColor: Colors.background.primary,
     paddingHorizontal: 20,
-    paddingTop: 20,
+    paddingTop: 4,
     paddingBottom: 24,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -566,10 +720,24 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: Colors.neutral[900],
     marginBottom: 4,
+    textAlign: 'center',
+  },
+  currencyContainer: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'center',
+  },
+  currencySymbol: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.neutral[900],
+    marginRight: 4,
+    marginBottom: 4,
   },
   statLabel: {
     fontSize: 12,
     color: Colors.neutral[600],
+    textAlign: 'center',
   },
   statDivider: {
     width: 1,

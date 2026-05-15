@@ -60,6 +60,20 @@ export const Colors = {
     900: '#7F1D1D',
   },
   
+  // Info Colors - For information messages
+  info: {
+    50: '#EFF6FF',
+    100: '#DBEAFE',
+    200: '#BFDBFE',
+    300: '#93C5FD',
+    400: '#60A5FA',
+    500: '#3B82F6', // Main info color
+    600: '#2563EB',
+    700: '#1D4ED8',
+    800: '#1E40AF',
+    900: '#1E3A8A',
+  },
+  
   // Neutral Colors - Clean, modern grays
   neutral: {
     0: '#FFFFFF',

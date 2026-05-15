@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { View, Text, TouchableOpacity, Image, Alert, StyleSheet } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import * as ImagePicker from 'expo-image-picker'
@@ -19,6 +19,12 @@ export default function ImageUpload({
   placeholder = "Tap to add image"
 }: ImageUploadProps) {
   const [uploading, setUploading] = useState(false)
+  const [localImageUrl, setLocalImageUrl] = useState<string | undefined>(currentImage)
+  
+  // Update local image URL when currentImage prop changes
+  useEffect(() => {
+    setLocalImageUrl(currentImage)
+  }, [currentImage])
 
   const handleImageSelection = async () => {
     try {
@@ -35,19 +41,28 @@ export default function ImageUpload({
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
-        aspect: [4, 3],
+        aspect: [1, 1], // Square aspect ratio for profile photos
         quality: 0.8,
       })
 
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0]
         
+        console.log('📸 Selected image URI:', asset.uri)
+        
         // Upload to Supabase Storage
-        const uploadResult = await ImageService.uploadImage(asset.uri, 'general-images')
+        const uploadResult = await ImageService.uploadImage(asset.uri, 'profile-images')
+        
+        console.log('📤 Upload result:', uploadResult)
         
         if (uploadResult.success && uploadResult.url) {
+          console.log('✅ Image uploaded successfully, URL:', uploadResult.url)
+          // Update local state immediately for instant feedback
+          setLocalImageUrl(uploadResult.url)
+          // Call callback to update parent state
           onImageUploaded(uploadResult.url)
         } else {
+          console.error('❌ Upload failed:', uploadResult.error)
           Alert.alert('Upload Failed', uploadResult.error || 'Failed to upload image')
         }
       }
@@ -65,19 +80,57 @@ export default function ImageUpload({
       'Are you sure you want to remove this image?',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Remove', style: 'destructive', onPress: onImageRemoved }
+        { 
+          text: 'Remove', 
+          style: 'destructive', 
+          onPress: () => {
+            setLocalImageUrl(undefined)
+            onImageRemoved()
+          }
+        }
       ]
     )
   }
 
+  // Check if we have a valid image URL (use local state for immediate updates)
+  const imageUrl = localImageUrl || currentImage
+  const hasValidImage = imageUrl && imageUrl.trim().length > 0
+
+  console.log('🖼️ ImageUpload render - hasValidImage:', hasValidImage, 'imageUrl:', imageUrl, 'localImageUrl:', localImageUrl, 'currentImage:', currentImage)
+
+  // Always render the component - never hide it
   return (
     <View style={styles.container}>
-      {currentImage ? (
+      {hasValidImage ? (
         <View style={styles.imageContainer}>
-          <Image source={{ uri: currentImage }} style={styles.image} />
-          <TouchableOpacity style={styles.removeButton} onPress={removeImage}>
-            <Ionicons name="close-circle" size={24} color={Colors.error?.[500] || '#ef4444'} />
-          </TouchableOpacity>
+          <Image 
+            source={{ uri: imageUrl }} 
+            style={styles.image}
+            resizeMode="cover"
+            onLoad={() => {
+              console.log('✅ Image loaded successfully:', imageUrl)
+            }}
+            onError={(error) => {
+              // If image fails to load, treat as no image
+              console.error('❌ Image failed to load:', imageUrl, error)
+              setLocalImageUrl(undefined)
+            }}
+          />
+          <View style={styles.imageActions}>
+            <TouchableOpacity style={styles.changeButton} onPress={handleImageSelection} disabled={uploading}>
+              <Ionicons 
+                name={uploading ? "hourglass" : "camera"} 
+                size={20} 
+                color={uploading ? Colors.neutral?.[400] || '#9ca3af' : '#ffffff'} 
+              />
+              <Text style={styles.changeButtonText}>
+                {uploading ? 'Uploading...' : 'Change'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.removeButton} onPress={removeImage}>
+              <Ionicons name="close-circle" size={24} color={Colors.error?.[500] || '#ef4444'} />
+            </TouchableOpacity>
+          </View>
         </View>
       ) : (
         <TouchableOpacity 
@@ -102,32 +155,59 @@ export default function ImageUpload({
 const styles = StyleSheet.create({
   container: {
     marginVertical: 8,
+    width: '100%',
+    minHeight: 200,
   },
   imageContainer: {
     position: 'relative',
-    borderRadius: 8,
+    borderRadius: 12,
     overflow: 'hidden',
+    width: '100%',
+    minHeight: 200,
   },
   image: {
     width: '100%',
     height: 200,
-    borderRadius: 8,
+    borderRadius: 12,
+    backgroundColor: Colors.neutral[100],
   },
-  removeButton: {
+  imageActions: {
     position: 'absolute',
     top: 8,
     right: 8,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  changeButton: {
+    backgroundColor: Colors.primary?.[500] || '#3b82f6',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  changeButtonText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  removeButton: {
     backgroundColor: 'rgba(255, 255, 255, 0.9)',
     borderRadius: 12,
+    padding: 2,
   },
   uploadButton: {
     borderWidth: 2,
     borderColor: '#d1d5db',
     borderStyle: 'dashed',
-    borderRadius: 8,
-    padding: 32,
+    borderRadius: 12,
+    padding: 40,
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#f9fafb',
+    width: '100%',
+    minHeight: 200,
   },
   uploading: {
     borderColor: '#9ca3af',

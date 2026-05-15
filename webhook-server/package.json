@@ -1,5 +1,5 @@
 {
-  "name": "muyacon-webhook-server",
+  "name": "mescott-webhook-server",
   "version": "1.0.0",
   "description": "Webhook server for Chapa payment notifications",
   "main": "index.js",

@@ -1,20 +1,27 @@
-import React, { useEffect, useState } from 'react'
-import { View, Text, Image } from 'react-native'
+import React, { useEffect } from 'react'
+import { StatusBar } from 'react-native'
 import { Tabs, usePathname } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { AuthProvider, useAuth } from '../contexts/SimpleAuthContext'
 import { LanguageProvider } from '../contexts/LanguageContext'
 import { NotificationProvider, useNotifications } from '../contexts/NotificationContext'
 import { ToastProvider } from '../contexts/ToastContext'
-import NotificationBadge from '../components/NotificationBadge'
+import { useTabBarStyle } from '../components/LiquidGlassTabBar'
+import { AppBackground } from '../components/AppBackground'
 import Colors from '../constants/Colors'
 import * as SplashScreen from 'expo-splash-screen'
+
+// Keep the splash screen visible while we fetch resources
+SplashScreen.preventAutoHideAsync()
 
 function TabNavigator() {
   const { user, isAuthenticated } = useAuth()
   const { unreadCount } = useNotifications()
   const pathname = usePathname()
+  const insets = useSafeAreaInsets()
+  const { tabBarBackground, tabBarStyle: liquidGlassStyle, supportsLiquidGlass } = useTabBarStyle()
   
   // Determine which tabs to show based on user role
   const isTasker = user?.current_mode === 'tasker'
@@ -47,19 +54,21 @@ function TabNavigator() {
   const shouldHideTabs = subPages.some(page => pathname.startsWith(page))
   
   // Debug logging
-  console.log('TabNavigator render - isTasker:', isTasker, 'current_mode:', user?.current_mode, 'pathname:', pathname, 'shouldHideTabs:', shouldHideTabs)
+  console.log('TabNavigator render - isTasker:', isTasker, 'current_mode:', user?.current_mode, 'pathname:', pathname, 'shouldHideTabs:', shouldHideTabs, 'Liquid Glass:', supportsLiquidGlass)
+  
+  // Adaptive tab bar colors based on liquid glass support
+  const tabBarActiveColor = supportsLiquidGlass ? Colors.primary[500] : '#FFFFFF'
+  const tabBarInactiveColor = supportsLiquidGlass ? Colors.neutral[600] : Colors.neutral[300]
   
   return (
     <Tabs
       key={user?.current_mode} // Force re-render when mode changes
       screenOptions={{
-        tabBarActiveTintColor: Colors.primary[500],
-        tabBarInactiveTintColor: Colors.neutral[400],
+        tabBarActiveTintColor: tabBarActiveColor,
+        tabBarInactiveTintColor: tabBarInactiveColor,
+        tabBarBackground: tabBarBackground,
         tabBarStyle: isAuthenticated && !shouldHideTabs ? {
-          backgroundColor: '#fff',
-          borderTopWidth: 1,
-          borderTopColor: Colors.neutral[200],
-          paddingBottom: 0, // Remove padding, let SafeAreaView handle it
+          ...liquidGlassStyle,
           paddingTop: 4,
           height: 70,
           position: 'absolute',
@@ -93,11 +102,11 @@ function TabNavigator() {
         }}
       />
       
-      {/* Jobs Tab - Always visible */}
+      {/* Tasks Tab - Always visible */}
       <Tabs.Screen
         name="jobs"
         options={{
-          title: 'Jobs',
+          title: 'Tasks',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="briefcase" size={size} color={color} />
           ),
@@ -295,8 +304,22 @@ function TabNavigator() {
 }
 
 function AppContent() {
+  const { isLoading } = useAuth()
+
+  useEffect(() => {
+    if (!isLoading) {
+      // Hide splash screen when app is ready
+      SplashScreen.hideAsync()
+    }
+  }, [isLoading])
+
   return (
-    <SafeAreaView style={{ flex: 1 }} edges={['top']}>
+    <SafeAreaView 
+      style={{ flex: 1 }} 
+      edges={['top']}
+    >
+      <StatusBar barStyle="dark-content" />
+      <AppBackground />
       <TabNavigator />
     </SafeAreaView>
   );
@@ -304,14 +327,16 @@ function AppContent() {
 
 export default function RootLayout() {
   return (
-    <LanguageProvider>
-      <AuthProvider>
-        <NotificationProvider>
-          <ToastProvider>
-            <AppContent />
-          </ToastProvider>
-        </NotificationProvider>
-      </AuthProvider>
-    </LanguageProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <LanguageProvider>
+        <AuthProvider>
+          <NotificationProvider>
+            <ToastProvider>
+              <AppContent />
+            </ToastProvider>
+          </NotificationProvider>
+        </AuthProvider>
+      </LanguageProvider>
+    </GestureHandlerRootView>
   )
 }

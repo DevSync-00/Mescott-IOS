@@ -29,7 +29,7 @@ const enTranslations = {
   
   // Navigation
   'nav.home': 'Home',
-  'nav.jobs': 'Jobs',
+  'nav.jobs': 'Tasks',
   'nav.chats': 'Chats',
   'nav.bookings': 'Bookings',
   'nav.profile': 'Profile',

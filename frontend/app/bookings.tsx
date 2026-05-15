@@ -70,8 +70,7 @@ export default function Bookings() {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary[500]} />
-          <Text style={styles.loadingText}>Loading...</Text>
+          <SkeletonList count={3} />
         </View>
       </SafeAreaView>
     )
@@ -230,10 +229,10 @@ export default function Bookings() {
         style={styles.bookingsList} 
         showsVerticalScrollIndicator={true}
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={styles.scrollContent}
-        bounces={false}
-        alwaysBounceVertical={false}
-        overScrollMode="never"
+        contentContainerStyle={{ ...styles.scrollContent, paddingBottom: 120 }}
+        bounces={true}
+        alwaysBounceVertical={true}
+        overScrollMode="always"
         scrollEventThrottle={16}
       >
         {loading ? (
@@ -296,8 +295,8 @@ export default function Bookings() {
 
               {/* Action Buttons */}
               <View style={styles.actionButtons}>
-                {/* Chat Button - Always available for confirmed bookings */}
-                {(booking.status === 'confirmed' || booking.status === 'in_progress') && (
+                {/* Chat Button - Available for pending bookings */}
+                {booking.status === 'pending' && (
                   <TouchableOpacity
                     style={[styles.actionButton, styles.chatButton]}
                     onPress={() => handleChatPress(booking)}
@@ -308,43 +307,6 @@ export default function Bookings() {
                 )}
 
                 {booking.status === 'pending' && user?.current_mode === 'tasker' && (
-                  <>
-                    <TouchableOpacity
-                      style={[styles.actionButton, styles.acceptButton]}
-                      onPress={() => {
-                        Alert.alert(
-                          'Accept Booking',
-                          'Are you sure you want to accept this booking?',
-                          [
-                            { text: 'Cancel', style: 'cancel' },
-                            { text: 'Accept', onPress: () => updateBookingStatus(booking.id, 'confirmed') }
-                          ]
-                        )
-                      }}
-                    >
-                      <Ionicons name="checkmark" size={18} color="#fff" />
-                      <Text style={styles.actionButtonText}>Accept</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.actionButton, styles.declineButton]}
-                      onPress={() => {
-                        Alert.alert(
-                          'Decline Booking',
-                          'Are you sure you want to decline this booking?',
-                          [
-                            { text: 'Cancel', style: 'cancel' },
-                            { text: 'Decline', onPress: () => updateBookingStatus(booking.id, 'cancelled') }
-                          ]
-                        )
-                      }}
-                    >
-                      <Ionicons name="close" size={18} color="#fff" />
-                      <Text style={styles.actionButtonText}>Decline</Text>
-                    </TouchableOpacity>
-                  </>
-                )}
-
-                {booking.status === 'confirmed' && user?.current_mode === 'tasker' && (
                   <TouchableOpacity
                     style={[styles.actionButton, styles.completeButton]}
                     onPress={() => {
@@ -364,7 +326,7 @@ export default function Bookings() {
                 )}
 
                 {/* Customer actions */}
-                {booking.status === 'confirmed' && user?.current_mode === 'customer' && (
+                {booking.status === 'pending' && user?.current_mode === 'customer' && (
                   <TouchableOpacity
                     style={[styles.actionButton, styles.cancelButton]}
                     onPress={() => {
@@ -427,7 +389,7 @@ const styles = StyleSheet.create({
   header: {
     backgroundColor: Colors.background.primary,
     paddingHorizontal: 20,
-    paddingTop: 20,
+    paddingTop: 4,
     paddingBottom: 24,
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
@@ -542,8 +504,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   scrollContent: {
-    paddingTop: 8, // Small padding to prevent dragging from top safe area
-    paddingBottom: 20,
+    paddingTop: 0,
+    paddingBottom: 100, // Base padding, will be overridden to 120 in contentContainerStyle
+    flexGrow: 1, // Ensure content can grow to fill available space
   },
   loadingContainer: {
     alignItems: 'center',

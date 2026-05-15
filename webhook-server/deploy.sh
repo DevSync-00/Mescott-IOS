@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Muyacon Webhook Server Deployment Script
+# Mescott Webhook Server Deployment Script
 
-echo "🚀 Deploying Muyacon Webhook Server..."
+echo "🚀 Deploying Mescott Webhook Server..."
 
 # Check if Vercel CLI is installed
 if ! command -v vercel &> /dev/null; then

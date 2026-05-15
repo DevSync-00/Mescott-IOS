@@ -24,7 +24,7 @@ app.use((req, res, next) => {
 app.get('/', (req, res) => {
   res.json({
     success: true,
-    message: 'Muyacon Webhook Server is running!',
+    message: 'Mescott Webhook Server is running!',
     timestamp: new Date().toISOString(),
     status: 'Ready to receive webhooks'
   });
@@ -66,7 +66,7 @@ app.post('/webhook', async (req, res) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`🚀 Muyacon Webhook Server running on port ${PORT}`);
+  console.log(`🚀 Mescott Webhook Server running on port ${PORT}`);
   console.log(`📍 Health check: http://localhost:${PORT}/`);
   console.log(`🔗 Webhook endpoint: http://localhost:${PORT}/webhook`);
   console.log(`🧪 Test endpoint: http://localhost:${PORT}/test`);

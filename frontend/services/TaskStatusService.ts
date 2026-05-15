@@ -181,58 +181,55 @@ export class TaskStatusService {
     }
   }
 
-  // Send notifications based on status change
+  // Send notifications based on status change (NON-BLOCKING & PARALLEL)
   private static async sendStatusNotifications(
     task: any,
     newStatus: TaskStatus,
     updatedBy: string
   ): Promise<void> {
-    try {
-      const statusMessages = {
-        'assigned': 'Your task has been assigned to a tasker',
-        'in_progress': 'Your task is now in progress',
-        'completed': 'Your task has been completed',
-        'cancelled': 'Your task has been cancelled',
-        'disputed': 'Your task is under dispute'
-      }
+    // Run notifications in background without blocking
+    const notificationPromise = (async () => {
+      try {
+        const statusMessages = {
+          'assigned': 'Your task has been assigned to a tasker',
+          'in_progress': 'Your task is now in progress',
+          'completed': 'Your task has been completed',
+          'cancelled': 'Your task has been cancelled',
+          'disputed': 'Your task is under dispute'
+        }
 
-      const message = statusMessages[newStatus]
-      if (message) {
-        // Notify customer
+        const message = statusMessages[newStatus]
+        if (!message) return
+
+        const notifications: Promise<any>[] = []
+
+        // Collect all notification promises to run in parallel
         if (task.customer_id !== updatedBy) {
-          await SimpleNotificationService.createTaskNotification(
-            task.title,
-            newStatus,
-            message
-          )
-          
-          await PushNotificationService.createTaskNotification(
-            task.title,
-            task.id,
-            'System',
-            message
+          notifications.push(
+            SimpleNotificationService.createTaskNotification(task.title, newStatus, message),
+            PushNotificationService.createTaskNotification(task.title, task.id, 'System', message)
           )
         }
 
-        // Notify tasker
         if (task.tasker_id && task.tasker_id !== updatedBy) {
-          await SimpleNotificationService.createTaskNotification(
-            task.title,
-            newStatus,
-            message
-          )
-          
-          await PushNotificationService.createTaskNotification(
-            task.title,
-            task.id,
-            'System',
-            message
+          notifications.push(
+            SimpleNotificationService.createTaskNotification(task.title, newStatus, message),
+            PushNotificationService.createTaskNotification(task.title, task.id, 'System', message)
           )
         }
+
+        // Run all notifications in parallel and don't wait for them
+        if (notifications.length > 0) {
+          await Promise.allSettled(notifications)
+          console.log('✅ Status notifications sent in parallel')
+        }
+      } catch (error) {
+        console.error('Error sending status notifications:', error)
       }
-    } catch (error) {
-      console.error('Error sending status notifications:', error)
-    }
+    })()
+
+    // Don't await - let it run in background
+    notificationPromise.catch(err => console.error('Background notification error:', err))
   }
 
   // Get task status history (table doesn't exist yet)

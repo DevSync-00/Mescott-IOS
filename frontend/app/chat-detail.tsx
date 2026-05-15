@@ -1,11 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback, memo } from 'react'
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  SafeAreaView,
   TextInput,
   KeyboardAvoidingView,
   Platform,
@@ -14,17 +13,23 @@ import {
   Dimensions,
   StatusBar,
   Image,
+  FlatList,
+  Modal,
 } from 'react-native'
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as ImagePicker from 'expo-image-picker'
 import * as DocumentPicker from 'expo-document-picker'
 import { Ionicons } from '@expo/vector-icons'
-import { useRouter, useLocalSearchParams } from 'expo-router'
+import { DeviceEventEmitter } from 'react-native'
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router'
 import { useAuth } from '../contexts/SimpleAuthContext'
 import { ChatService, Chat } from '../services/ChatService'
 import { BookingService } from '../services/BookingService'
 import { SimpleNotificationService } from '../services/SimpleNotificationService'
 import { supabase } from '../lib/supabase'
 import Colors from '../constants/Colors'
+import SkeletonLoader from '../components/SkeletonLoader'
+import { ImageService } from '../services/ImageService'
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window')
 
@@ -35,7 +40,7 @@ interface Message {
   created_at: string
   sender_name?: string
   is_read?: boolean
-  message_type?: string
+  message_type?: 'text' | 'image' | 'file' | 'system'
   status?: 'sending' | 'sent' | 'delivered' | 'read'
 }
 
@@ -50,6 +55,8 @@ export default function ChatDetail() {
     taskTitle: string; 
     otherUserName: string;
   }>()
+  const insets = useSafeAreaInsets()
+  const [headerHeight, setHeaderHeight] = useState(0)
   
   const [chat, setChat] = useState<Chat | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -62,8 +69,12 @@ export default function ChatDetail() {
   const [lastSeen, setLastSeen] = useState<string>('')
   const [isSubscribed, setIsSubscribed] = useState(false)
   const [otherUserOnline, setOtherUserOnline] = useState(false)
+  const [imageModalVisible, setImageModalVisible] = useState(false)
+  const [selectedImageUri, setSelectedImageUri] = useState<string | null>(null)
+  const [optionsVisible, setOptionsVisible] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   
-  const scrollViewRef = useRef<ScrollView>(null)
+  const flatListRef = useRef<FlatList>(null)
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -80,8 +91,33 @@ export default function ChatDetail() {
   // Mark messages as read on screen focus and when new messages arrive
   useEffect(() => {
     if (!chatId || !user?.id) return
-    ChatService.markMessagesAsRead(chatId, user.id).catch(() => {})
+    const markAsRead = async () => {
+      try {
+        await ChatService.markMessagesAsRead(chatId, user.id)
+        DeviceEventEmitter.emit('chat:read', { chatId })
+        // Trigger a refresh of chat list to update unread counts
+        // This will be handled by the chats page's useFocusEffect
+      } catch (error) {
+        console.error('Error marking messages as read:', error)
+      }
+    }
+    markAsRead()
   }, [chatId, user?.id, messages.length])
+
+  // Refresh chat list when leaving this screen to update unread counts
+  useFocusEffect(
+    React.useCallback(() => {
+      // Mark as read when screen is focused
+      if (chatId && user?.id) {
+        ChatService.markMessagesAsRead(chatId, user.id).catch(() => {})
+      }
+      
+      return () => {
+        // When screen loses focus, messages should already be marked as read
+        // The chats page will refresh when we navigate back
+      }
+    }, [chatId, user?.id])
+  )
 
   useEffect(() => {
     if (otherUserName && otherUserName !== 'Unknown') {
@@ -108,25 +144,35 @@ export default function ChatDetail() {
     try {
       await ChatService.subscribeToChat(chat.id, {
         onMessage: (message) => {
-          setMessages(prev => [...prev, {
-            id: message.id,
-            message: message.message,
-            sender_id: message.sender_id,
-            created_at: message.created_at,
-            sender_name: message.sender?.full_name || 'Unknown',
-            is_read: false,
-            message_type: message.message_type || 'text',
-            status: 'delivered'
-          }])
+          setMessages(prev => {
+            // Check if message already exists to avoid duplicates
+            if (prev.some(m => m.id === message.id)) {
+              return prev
+            }
+            const next = [...prev, {
+              id: message.id,
+              message: message.message,
+              sender_id: message.sender_id,
+              created_at: message.created_at,
+              sender_name: message.sender?.full_name || 'Unknown',
+              is_read: false,
+              message_type: message.message_type || 'text',
+              status: 'delivered' as const
+            }]
+            return next.sort((m1, m2) => new Date(m1.created_at).getTime() - new Date(m2.created_at).getTime())
+          })
           // Mark as read if the new message is from the other user
           if (chatId && user?.id && message.sender_id !== user.id) {
-            ChatService.markMessagesAsRead(chatId, user.id).catch(() => {})
+            ChatService.markMessagesAsRead(chatId, user.id)
+              .then(() => DeviceEventEmitter.emit('chat:read', { chatId }))
+              .catch(() => {})
           }
           
-          // Scroll to bottom
-          setTimeout(() => {
-            scrollViewRef.current?.scrollToEnd({ animated: true })
-          }, 100)
+          // Scroll to bottom (not needed for inverted FlatList)
+        },
+        onMessageDeleted: (messageId) => {
+          console.log('Real-time: Removing deleted message from UI:', messageId)
+          setMessages(prev => prev.filter(m => m.id !== messageId))
         },
         onUserOnline: (userId, online) => {
           if (userId !== user?.id) {
@@ -145,8 +191,9 @@ export default function ChatDetail() {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary[500]} />
-          <Text style={styles.loadingText}>Loading...</Text>
+          <SkeletonLoader width={60} height={60} borderRadius={30} style={{ marginBottom: 16 }} />
+          <SkeletonLoader width={200} height={20} style={{ marginBottom: 8 }} />
+          <SkeletonLoader width={150} height={16} />
         </View>
       </SafeAreaView>
     )
@@ -162,8 +209,8 @@ export default function ChatDetail() {
 
     try {
       // Use the names from chatData if available
-      if (chatData.customer_name && chatData.tasker_name) {
-        const otherName = user.id === chatData.customer_id ? chatData.tasker_name : chatData.customer_name
+      if (chatData.customer?.full_name && chatData.tasker?.full_name) {
+        const otherName = user.id === chatData.customer_id ? chatData.tasker.full_name : chatData.customer.full_name
         if (otherName && otherName !== 'Unknown') {
           setParticipantName(otherName)
           return
@@ -222,20 +269,29 @@ export default function ChatDetail() {
       // Load participant name
       await loadParticipantName(chatData)
 
-      // Load messages
-      const messagesData = chatId
-        ? await ChatService.getChatMessagesByChatId(chatId)
-        : await ChatService.getChatMessages(chatData.id)
-      setMessages(messagesData)
-
-      // Set up real-time subscription after chat is loaded
-      if (chatData.id && user?.id) {
-        await subscribeToRealtimeChat()
+      // Fetch cached messages immediately, start fresh fetch and subscription in parallel
+      const targetChatId = chatId || chatData.id
+      const { cached, fresh } = await ChatService.getChatMessagesFast(targetChatId)
+      if (cached && cached.length > 0) {
+        const orderedCached = [...cached].sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+        setMessages(orderedCached)
       }
 
-      // Mark all messages as read when opening the chat
+      // Kick off subscription without blocking render
+      subscribeToRealtimeChat().catch(() => {})
+
+      // In parallel: fetch fresh messages and mark as read
+      fresh
+        .then((freshMsgs) => {
+          const orderedFresh = [...(freshMsgs || [])].sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+          setMessages(orderedFresh)
+        })
+        .catch(() => {})
+
       if (chatData.id && user?.id) {
-        await ChatService.markMessagesAsRead(chatData.id, user.id)
+        ChatService.markMessagesAsRead(chatData.id, user.id)
+          .then(() => DeviceEventEmitter.emit('chat:read', { chatId: chatData.id }))
+          .catch(() => {})
       }
 
     } catch (error) {
@@ -262,8 +318,11 @@ export default function ChatDetail() {
       status: 'sending'
     }
     
-    setMessages(prev => [...prev, tempMessage])
-    scrollToBottom()
+    setMessages(prev => {
+      const next = [...prev, tempMessage]
+      return next.sort((m1, m2) => new Date(m1.created_at).getTime() - new Date(m2.created_at).getTime())
+    })
+    // Auto-scroll handled by inverted FlatList
 
     try {
       setSending(true)
@@ -287,9 +346,10 @@ export default function ChatDetail() {
         
       // Reload messages to get the real message with proper ID
       setTimeout(async () => {
-        const messagesData = chatId
+        let messagesData = chatId
           ? await ChatService.getChatMessagesByChatId(chatId)
           : await ChatService.getChatMessages(chat?.id || '')
+        messagesData = (messagesData || []).sort((a: any, b: any) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
         setMessages(messagesData)
         
         // Mark the new message as read
@@ -314,11 +374,7 @@ export default function ChatDetail() {
   }
 
 
-  const scrollToBottom = () => {
-    setTimeout(() => {
-      scrollViewRef.current?.scrollToEnd({ animated: true })
-    }, 100)
-  }
+  // Auto-scroll handled by inverted FlatList automatically
 
   const handleFileUpload = async () => {
     Alert.alert(
@@ -417,23 +473,50 @@ export default function ChatDetail() {
     try {
       setSending(true)
       
-      // For now, we'll send the file URI as a text message
-      // In a real app, you'd upload the file to a storage service first
-      const fileMessage = fileType === 'image' 
-        ? `📷 Image: ${fileUri}` 
-        : `📄 Document: ${fileUri}`
-      
+      if (fileType === 'image') {
+        // Upload image to Supabase storage first
+        const uploadResult = await ImageService.uploadImage(fileUri, 'chat-images')
+        
+        if (!uploadResult.success || !uploadResult.url) {
+          Alert.alert('Error', 'Failed to upload image. Please try again.')
+          return
+        }
+        
+        // Send image URL with message_type='image'
+        let success = false
+        if (chatId) {
+          const result = await ChatService.sendMessage(chatId, user.id, uploadResult.url, 'image')
+          success = result !== null
+        } else if (chat?.id) {
+          const result = await ChatService.sendMessage(chat.id, user.id, uploadResult.url, 'image')
+          success = result !== null
+        }
+        
+        if (success) {
+          // Reload messages to show the new image
+          setTimeout(async () => {
+            const messagesData = chatId
+              ? await ChatService.getChatMessagesByChatId(chatId)
+              : await ChatService.getChatMessages(chat?.id || '')
+            setMessages(messagesData)
+          }, 500)
+        } else {
+          Alert.alert('Error', 'Failed to send image')
+        }
+      } else {
+        // For documents, send as file type
+        const fileMessage = `📄 Document: ${fileUri}`
       let success = false
       
       if (chatId) {
-        const result = await ChatService.sendMessage(chatId, user.id, fileMessage)
+          const result = await ChatService.sendMessage(chatId, user.id, fileMessage, 'file')
         success = result !== null
       } else if (chat?.id) {
-        success = await ChatService.sendMessageToChat(chat.id, fileMessage, user.id)
+          const result = await ChatService.sendMessage(chat.id, user.id, fileMessage, 'file')
+          success = result !== null
       }
       
       if (success) {
-        // Reload messages to show the new file message
         setTimeout(async () => {
           const messagesData = chatId
             ? await ChatService.getChatMessagesByChatId(chatId)
@@ -442,6 +525,7 @@ export default function ChatDetail() {
         }, 500)
       } else {
         Alert.alert('Error', 'Failed to send file')
+        }
       }
     } catch (error) {
       console.error('Error sending file:', error)
@@ -478,8 +562,8 @@ export default function ChatDetail() {
     }
   }
 
-  const isMyMessage = (message: Message) => {
-    return message.sender_id === user?.id
+  const isMyMessage = (message: Message | undefined | null) => {
+    return message?.sender_id === user?.id
   }
 
   const getOtherParticipantName = () => {
@@ -487,96 +571,32 @@ export default function ChatDetail() {
     return participantName
   }
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary[500]} />
-          <Text style={styles.loadingText}>Loading chat...</Text>
-        </View>
-      </SafeAreaView>
-    )
-  }
-
-  return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor={Colors.primary[600]} />
-      
-      {/* Modern Header */}
-      <View style={styles.modernHeader}>
-            <TouchableOpacity onPress={() => router.push('/chats')} style={styles.headerBackButton}>
-              <Ionicons name="arrow-back" size={24} color="#fff" />
-            </TouchableOpacity>
-        
-        <View style={styles.headerUserInfo}>
-          <View style={styles.headerAvatar}>
-            <Text style={styles.headerAvatarText}>
-              {getOtherParticipantName().charAt(0).toUpperCase()}
-            </Text>
-          </View>
-          <View style={styles.headerTextContainer}>
-            <Text style={styles.headerName}>{getOtherParticipantName()}</Text>
-            <Text style={styles.headerStatus}>
-              {isOnline ? 'Online' : lastSeen || 'Last seen recently'}
-            </Text>
-          </View>
-        </View>
-        
-        <View style={styles.headerActions}>
-          <TouchableOpacity style={styles.headerActionButton}>
-            <Ionicons name="ellipsis-vertical" size={24} color="#fff" />
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* Messages Area */}
-      <KeyboardAvoidingView 
-        style={styles.messagesArea}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
-      >
-        <ScrollView 
-          ref={scrollViewRef}
-          style={styles.messagesScrollView}
-          contentContainerStyle={styles.messagesContent}
-          showsVerticalScrollIndicator={false}
-          onContentSizeChange={scrollToBottom}
-          bounces={false}
-          alwaysBounceVertical={false}
-          overScrollMode="never"
-        >
-          {messages.length === 0 ? (
-            <View style={styles.emptyState}>
-              <View style={styles.emptyStateIcon}>
-                <Ionicons name="chatbubbles-outline" size={64} color={Colors.neutral[300]} />
-              </View>
-              <Text style={styles.emptyStateTitle}>Start a conversation</Text>
-              <Text style={styles.emptyStateSubtitle}>
-                Send a message to {getOtherParticipantName()} to begin chatting
-              </Text>
-            </View>
-          ) : (
-            messages.map((message, index) => {
-              const showDate = index === 0 || 
-                formatDate(message.created_at) !== formatDate(messages[index - 1].created_at)
+  // Memoized message item component - must be defined before conditional returns
+  // Note: With inverted FlatList, index is still the array index (0 = oldest, length-1 = newest)
+  const MessageItem = memo(({ message, index }: { message: Message; index: number }) => {
+    if (!message) return null
+    
+    // Show date if it's the newest message or date differs from next message in time
+    const nextMessage = messages[index + 1]
+    const showDate = index === messages.length - 1 || (nextMessage && formatDate(message.created_at) !== formatDate(nextMessage.created_at))
+    
               const isMyMsg = isMyMessage(message)
-              const showAvatar = !isMyMsg && (
-                index === messages.length - 1 || 
-                isMyMessage(messages[index + 1])
-              )
+    
+    // Show avatar if it's the newest message (last chronologically) or if next message is from different sender
+    const showAvatar = !isMyMsg && (index === messages.length - 1 || (nextMessage?.sender_id && nextMessage.sender_id !== message.sender_id))
               
               return (
-                <View key={message.id}>
+      <View>
                   {showDate && (
                     <View style={styles.dateSeparator}>
                       <Text style={styles.dateSeparatorText}>{formatDate(message.created_at)}</Text>
                     </View>
                   )}
                   
-                  <View style={[
-                    styles.messageRow,
-                    isMyMsg ? styles.myMessageRow : styles.otherMessageRow
-                  ]}>
+                   <View style={[
+                     styles.messageRow,
+                     isMyMsg ? styles.myMessageRow : styles.otherMessageRow
+                   ]}>
                     {showAvatar && (
                       <View style={styles.messageAvatar}>
                         <Text style={styles.messageAvatarText}>
@@ -584,30 +604,61 @@ export default function ChatDetail() {
                         </Text>
                       </View>
                     )}
-                    
-                    <View style={[
-                      styles.messageBubble,
-                      isMyMsg ? styles.myMessageBubble : styles.otherMessageBubble
-                    ]}>
-                      <Text style={[
-                        styles.messageText,
-                        isMyMsg ? styles.myMessageText : styles.otherMessageText
-                      ]}>
-                        {message.message}
-                      </Text>
-                      
-                      <View style={styles.messageFooter}>
-                        <Text style={[
-                          styles.messageTime,
-                          isMyMsg ? styles.myMessageTime : styles.otherMessageTime
-                        ]}>
-                          {formatTime(message.created_at)}
+                    {isMyMsg ? (
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        onLongPress={() => {
+                          if (!message?.id || !user?.id) return
+                          Alert.alert(
+                            'Delete message',
+                            'Are you sure you want to delete this message?',
+                            [
+                              { text: 'Cancel', style: 'cancel' },
+                              { text: 'Delete', style: 'destructive', onPress: async () => {
+                                  try {
+                                    const ok = await ChatService.deleteMessage(message.id, user.id)
+                                    if (ok) {
+                                      setMessages(prev => prev.filter(m => m.id !== message.id))
+                                    } else {
+                                      Alert.alert('Error', 'Failed to delete message. Please try again.')
+                                    }
+                                  } catch (error) {
+                                    console.error('Error deleting message:', error)
+                                    Alert.alert('Error', 'Failed to delete message. Please try again.')
+                                  }
+                                }
+                              }
+                            ]
+                          )
+                        }}
+                        style={[styles.messageBubble, styles.myMessageBubble]}
+                      >
+                        {message.message_type === 'image' ? (
+                          <TouchableOpacity
+                            onPress={() => {
+                              setSelectedImageUri(message.message)
+                              setImageModalVisible(true)
+                            }}
+                            activeOpacity={0.9}
+                          >
+                            <Image
+                              source={{ uri: message.message }}
+                              style={styles.messageImage}
+                              resizeMode="cover"
+                            />
+                          </TouchableOpacity>
+                        ) : (
+                        <Text style={[styles.messageText, styles.myMessageText]}>
+                          {message.message}
                         </Text>
-                        
-                        {isMyMsg && (
+                        )}
+                        <View style={styles.messageFooter}>
+                          <Text style={[styles.messageTime, styles.myMessageTime]}>
+                            {formatTime(message.created_at)}
+                          </Text>
                           <View style={styles.messageStatus}>
                             {message.status === 'sending' && (
-                              <ActivityIndicator size="small" color={Colors.neutral[400]} />
+              <SkeletonLoader width={16} height={16} borderRadius={8} animated={true} />
                             )}
                             {message.status === 'sent' && (
                               <Ionicons name="checkmark" size={16} color={Colors.neutral[400]} />
@@ -619,16 +670,121 @@ export default function ChatDetail() {
                               <Ionicons name="checkmark-done" size={16} color={Colors.primary[500]} />
                             )}
                           </View>
+                        </View>
+                      </TouchableOpacity>
+                    ) : (
+                      <View style={[styles.messageBubble, styles.otherMessageBubble]}>
+                        {message.message_type === 'image' ? (
+                          <TouchableOpacity
+                            onPress={() => {
+                              setSelectedImageUri(message.message)
+                              setImageModalVisible(true)
+                            }}
+                            activeOpacity={0.9}
+                          >
+                            <Image
+                              source={{ uri: message.message }}
+                              style={styles.messageImage}
+                              resizeMode="cover"
+                            />
+                          </TouchableOpacity>
+                        ) : (
+                        <Text style={[styles.messageText, styles.otherMessageText]}>
+                          {message.message}
+                        </Text>
                         )}
+                        <View style={styles.messageFooter}>
+                          <Text style={[styles.messageTime, styles.otherMessageTime]}>
+                            {formatTime(message.created_at)}
+                          </Text>
+                        </View>
                       </View>
-                    </View>
+                    )}
                   </View>
                 </View>
               )
             })
-          )}
-          
-        </ScrollView>
+
+  // Memoized callbacks - must be defined before conditional returns
+  const renderMessage = useCallback(({ item, index }: { item: Message; index: number }) => (
+    <MessageItem message={item} index={index} />
+  ), [participantName])
+
+  const keyExtractor = useCallback((item: Message) => item.id, [])
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <SkeletonLoader width={60} height={60} borderRadius={30} style={{ marginBottom: 16 }} />
+          <SkeletonLoader width={200} height={20} style={{ marginBottom: 8 }} />
+          <SkeletonLoader width={150} height={16} />
+        </View>
+      </SafeAreaView>
+    )
+  }
+
+  return (
+    <SafeAreaView style={styles.container} edges={['bottom']}>
+      <StatusBar barStyle="dark-content" backgroundColor={Colors.background.primary} />
+      
+      {/* Modern Header */}
+      <View style={styles.modernHeader} onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}>
+            <TouchableOpacity onPress={() => router.push('/chats')} style={styles.headerBackButton}>
+              <Ionicons name="arrow-back" size={24} color={Colors.neutral[800]} />
+            </TouchableOpacity>
+        
+        <View style={styles.headerUserInfo}>
+          <View style={styles.headerAvatar}>
+            <Text style={styles.headerAvatarText}>
+              {getOtherParticipantName().charAt(0).toUpperCase()}
+            </Text>
+          </View>
+          <View style={styles.headerTextContainer}>
+            <Text style={styles.headerName}>{getOtherParticipantName()}</Text>
+            {!!(chat?.task?.title) && (
+              <Text style={styles.headerSubtitle} numberOfLines={1}>
+                {chat.task.title}
+              </Text>
+            )}
+          </View>
+        </View>
+        
+        <View style={styles.headerActions}>
+          <TouchableOpacity style={styles.headerActionButton} onPress={() => setOptionsVisible(true)}>
+            <Ionicons name="ellipsis-vertical" size={24} color={Colors.neutral[800]} />
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Messages Area */}
+      <KeyboardAvoidingView 
+        style={styles.messagesArea}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}
+      >
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          inverted={false}
+          keyExtractor={keyExtractor}
+          renderItem={renderMessage}
+          style={styles.messagesScrollView}
+          contentContainerStyle={styles.messagesContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          initialNumToRender={15}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          removeClippedSubviews={true}
+          updateCellsBatchingPeriod={50}
+          getItemLayout={undefined}
+          bounces={true}
+          alwaysBounceVertical={true}
+          onEndReachedThreshold={0.5}
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+        />
 
         {/* Modern Input Area */}
         <View style={styles.inputArea}>
@@ -666,27 +822,112 @@ export default function ChatDetail() {
                 disabled={sending}
               >
                 {sending ? (
-                  <ActivityIndicator size="small" color="#fff" />
+                  <SkeletonLoader width={20} height={20} borderRadius={10} animated={true} />
                 ) : (
                   <Ionicons name="send" size={20} color="#fff" />
                 )}
               </TouchableOpacity>
-            ) : (
-              <TouchableOpacity style={styles.uploadButton}>
-                <Ionicons name="image" size={24} color={Colors.primary[500]} />
-              </TouchableOpacity>
-            )}
+            ) : null}
           </View>
         </View>
       </KeyboardAvoidingView>
-    </View>
+
+      {/* Image Viewer Modal for Chat Images */}
+      <Modal
+        visible={imageModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setImageModalVisible(false)
+          setSelectedImageUri(null)
+        }}
+      >
+        <View style={styles.modalContainer}>
+          <StatusBar backgroundColor="rgba(0,0,0,0.9)" barStyle="light-content" />
+          
+          {/* Header */}
+          <View style={styles.modalHeader}>
+            <TouchableOpacity 
+              onPress={() => {
+                setImageModalVisible(false)
+                setSelectedImageUri(null)
+              }} 
+              style={styles.closeButton}
+            >
+              <Ionicons name="close" size={24} color="#fff" />
+            </TouchableOpacity>
+            <View style={styles.placeholder} />
+          </View>
+
+          {/* Image */}
+          {selectedImageUri && (
+            <View style={styles.modalImageContainer}>
+              <Image
+                source={{ uri: selectedImageUri }}
+                style={styles.modalImage}
+                resizeMode="contain"
+              />
+            </View>
+          )}
+        </View>
+      </Modal>
+      
+      {/* Options Bottom Sheet */}
+      <Modal
+        visible={optionsVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setOptionsVisible(false)}
+      >
+        <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.25)' }} activeOpacity={1} onPress={() => setOptionsVisible(false)}>
+          <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: '#fff', borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 16 }}>
+            <TouchableOpacity
+              style={{ paddingVertical: 14 }}
+              disabled={deleting}
+              onPress={() => {
+                if (!chat?.id) return
+                Alert.alert('Delete chat', 'This will delete the entire conversation for you. Continue?', [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Delete', style: 'destructive', onPress: async () => {
+                      try {
+                        setDeleting(true)
+                        const ok = await ChatService.deleteChatAndMessages(chat.id, user?.id || '')
+                        setDeleting(false)
+                        setOptionsVisible(false)
+                        if (ok) {
+                          // Emit event to notify chats list that chat was deleted
+                          DeviceEventEmitter.emit('chat:deleted', { chatId: chat.id })
+                          router.push('/chats')
+                        } else {
+                          Alert.alert('Error', 'Failed to delete chat. Please try again.')
+                        }
+                      } catch (error) {
+                        console.error('Error deleting chat:', error)
+                        setDeleting(false)
+                        setOptionsVisible(false)
+                        Alert.alert('Error', 'Failed to delete chat. Please try again.')
+                      }
+                    }
+                  }
+                ])
+              }}
+            >
+              <Text style={{ color: Colors.primary[600], fontWeight: '600', fontSize: 16 }}>Delete chat</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={{ paddingVertical: 14 }} onPress={() => setOptionsVisible(false)}>
+              <Text style={{ color: Colors.neutral[700], fontSize: 16 }}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+    </SafeAreaView>
   )
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f0f0f0',
+    backgroundColor: '#f8f9fa',
   },
   loadingContainer: {
     flex: 1,
@@ -703,15 +944,17 @@ const styles = StyleSheet.create({
   modernHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    paddingTop: Platform.OS === 'ios' ? 50 : 20,
-    backgroundColor: Colors.primary[600],
-    elevation: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    paddingTop: Platform.OS === 'ios' ? 8 : 8,
+    backgroundColor: Colors.background.primary,
+    elevation: 2,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 2,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.neutral[100],
   },
   headerBackButton: {
     padding: 8,
@@ -723,31 +966,36 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.neutral[200],
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
   },
   headerAvatarText: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
-    color: '#fff',
+    color: Colors.neutral[800],
   },
   headerTextContainer: {
     flex: 1,
   },
   headerName: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '600',
-    color: '#fff',
+    color: Colors.neutral[900],
   },
   headerStatus: {
     fontSize: 14,
     color: 'rgba(255, 255, 255, 0.8)',
     marginTop: 2,
+  },
+  headerSubtitle: {
+    fontSize: 12,
+    color: Colors.neutral[500],
+    marginTop: 1,
   },
   headerActions: {
     flexDirection: 'row',
@@ -761,7 +1009,7 @@ const styles = StyleSheet.create({
   // Messages Area Styles
   messagesArea: {
     flex: 1,
-    backgroundColor: '#f0f0f0',
+    backgroundColor: '#f8f9fa',
   },
   messagesScrollView: {
     flex: 1,
@@ -840,37 +1088,52 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   
-  // Message Bubble Styles
+  // Message Bubble Styles - Modern Design
   messageBubble: {
     maxWidth: screenWidth * 0.75,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 20,
-    elevation: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 18,
+    elevation: 2,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
   },
   myMessageBubble: {
     backgroundColor: Colors.primary[500],
     borderBottomRightRadius: 4,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    borderBottomLeftRadius: 18,
   },
   otherMessageBubble: {
-    backgroundColor: '#fff',
+    backgroundColor: '#ffffff',
     borderBottomLeftRadius: 4,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    borderBottomRightRadius: 18,
+    borderWidth: 0.5,
+    borderColor: Colors.neutral[200],
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
   },
   
-  // Message Text Styles
+  // Message Text Styles - Modern Typography
   messageText: {
-    fontSize: 16,
-    lineHeight: 20,
+    fontSize: 15,
+    lineHeight: 22,
+    letterSpacing: 0.2,
   },
   myMessageText: {
-    color: '#fff',
+    color: '#ffffff',
+    fontWeight: '400',
   },
   otherMessageText: {
     color: Colors.neutral[900],
+    fontWeight: '400',
   },
   
   // Message Footer Styles
@@ -893,29 +1156,36 @@ const styles = StyleSheet.create({
   messageStatus: {
     marginLeft: 4,
   },
+  messageImage: {
+    width: screenWidth * 0.65,
+    height: 200,
+    borderRadius: 12,
+    marginBottom: 4,
+  },
   
-  
-  // Input Area Styles
+  // Input Area Styles - Modern Design
   inputArea: {
-    backgroundColor: '#fff',
+    backgroundColor: '#ffffff',
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderTopWidth: 1,
-    borderTopColor: Colors.border.primary,
-    elevation: 4,
+    borderTopColor: Colors.neutral[100],
+    elevation: 8,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    backgroundColor: '#f5f5f5',
-    borderRadius: 24,
-    paddingHorizontal: 4,
-    paddingVertical: 4,
-    minHeight: 48,
+    backgroundColor: Colors.neutral[50],
+    borderRadius: 28,
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+    minHeight: 52,
+    borderWidth: 1,
+    borderColor: Colors.neutral[100],
   },
   inputActionButton: {
     padding: 8,
@@ -925,12 +1195,12 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    marginRight: 4,
-    minHeight: 40,
+    backgroundColor: '#ffffff',
+    borderRadius: 22,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginRight: 6,
+    minHeight: 42,
   },
   messageInput: {
     flex: 1,
@@ -945,13 +1215,56 @@ const styles = StyleSheet.create({
   },
   sendButton: {
     backgroundColor: Colors.primary[500],
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     justifyContent: 'center',
     alignItems: 'center',
+    elevation: 3,
+    shadowColor: Colors.primary[500],
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
   },
   uploadButton: {
     padding: 8,
+  },
+  // Modal Styles for Image Viewer
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalHeader: {
+    position: 'absolute',
+    top: 50,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    zIndex: 1,
+  },
+  closeButton: {
+    padding: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 20,
+  },
+  modalImageContainer: {
+    flex: 1,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalImage: {
+    width: '100%',
+    height: '80%',
+    borderRadius: 8,
+  },
+  placeholder: {
+    width: 40,
   },
 })

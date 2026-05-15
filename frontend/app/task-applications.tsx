@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Modal, Image } from 'react-native'
+import SkeletonLoader, { SkeletonList } from '../components/SkeletonLoader'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons'
 import { useLocalSearchParams, useRouter } from 'expo-router'
@@ -30,10 +31,9 @@ export default function TaskApplications() {
   // Show loading while auth is being determined
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary[500]} />
-          <Text style={styles.loadingText}>Loading...</Text>
+          <SkeletonList count={3} />
         </View>
       </SafeAreaView>
     )
@@ -128,16 +128,8 @@ export default function TaskApplications() {
   }
 
   const handleBackPress = () => {
-    // Navigate back to task detail page instead of using router.back()
-    if (taskId) {
-      router.push({
-        pathname: '/task-detail',
-        params: { taskId: taskId as string }
-      })
-    } else {
-      // Fallback to jobs page if no taskId
-      router.push('/jobs')
-    }
+    // Return to list context rather than old full task-detail page
+    router.push('/jobs')
   }
 
   const getStatusColor = (status: string) => {
@@ -162,7 +154,7 @@ export default function TaskApplications() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.header}>
           <TouchableOpacity onPress={handleBackPress} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color={Colors.neutral[900]} />
@@ -171,15 +163,14 @@ export default function TaskApplications() {
           <View style={styles.placeholder} />
         </View>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary[500]} />
-          <Text style={styles.loadingText}>Loading applications...</Text>
+          <SkeletonList count={3} />
         </View>
       </SafeAreaView>
     )
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
       <View style={styles.header}>
         <TouchableOpacity onPress={handleBackPress} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color={Colors.neutral[900]} />
@@ -319,7 +310,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingVertical: 12,
     backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: Colors.neutral[200],
@@ -339,7 +330,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingTop: 8, // Small padding to prevent dragging from top safe area
+    paddingTop: 0,
     paddingBottom: 20,
   },
   loadingContainer: {

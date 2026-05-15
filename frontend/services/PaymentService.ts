@@ -92,17 +92,13 @@ export class PaymentService {
         throw paymentError
       }
 
-      // Send notification to customer about payment requirement
-      try {
-        await UnifiedNotificationService.notifyPaymentRequired(
-          taskId,
-          task.title,
-          customerUserId, // Use user_id for notifications too
-          paymentAmount
-        )
-      } catch (notificationError) {
-        // Don't fail the payment creation
-      }
+      // Send notification to customer about payment requirement (non-blocking)
+      UnifiedNotificationService.notifyPaymentRequired(
+        taskId,
+        task.title,
+        customerUserId, // Use user_id for notifications too
+        paymentAmount
+      ).catch(err => console.error('Payment notification error:', err))
 
       return {
         ...payment,

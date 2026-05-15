@@ -120,15 +120,15 @@ export class BookingService {
         const task = app.tasks as any // tasks is an object, not an array
         
         // Map task status to booking status
+        // Pending = tasks that haven't been completed (open, assigned, in_progress, etc.)
         let bookingStatus: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled'
         if (task?.status === 'completed') {
           bookingStatus = 'completed'
         } else if (task?.status === 'cancelled') {
           bookingStatus = 'cancelled'
-        } else if (task?.status === 'in_progress') {
-          bookingStatus = 'in_progress'
         } else {
-          bookingStatus = 'confirmed'
+          // All other statuses (open, assigned, in_progress, etc.) are pending
+          bookingStatus = 'pending'
         }
         
         return {
@@ -803,23 +803,26 @@ export class BookingService {
             if (taskDetails) {
               const paymentAmount = taskDetails.final_price || taskDetails.budget
               
-              // Create payment requirement
-              await PaymentService.createTaskPayment(
-                application.task_id,
-                taskDetails.customer_id,
-                paymentAmount,
-                `Payment for completed task: ${taskDetails.title}`
-              )
-
-              // Notify tasker that payment is ready
-              if (taskDetails.tasker_id) {
-                await UnifiedNotificationService.notifyTaskerPaymentReady(
+              // Run payment creation and notifications in parallel (non-blocking)
+              const operationsPromise = Promise.allSettled([
+                // Create payment requirement
+                PaymentService.createTaskPayment(
+                  application.task_id,
+                  taskDetails.customer_id,
+                  paymentAmount,
+                  `Payment for completed task: ${taskDetails.title}`
+                ),
+                // Notify tasker that payment is ready (if exists)
+                taskDetails.tasker_id ? UnifiedNotificationService.notifyTaskerPaymentReady(
                   application.task_id,
                   taskDetails.title,
                   taskDetails.tasker_id,
                   paymentAmount
-                )
-              }
+                ) : Promise.resolve()
+              ])
+              
+              // Don't await - let it run in background
+              operationsPromise.catch(err => console.error('Background payment/notification error:', err))
             }
 
             // Delete chat and all messages for this task when completed

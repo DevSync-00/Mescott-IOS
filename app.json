@@ -1,25 +1,28 @@
 {
   "expo": {
-    "name": "Muyacon",
+    "name": "Mescott",
     "slug": "muyacon-marketplace",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./frontend/assets/images/favicon.png",
-    "scheme": "muyacon",
+    "icon": "./frontend/assets/images/icon.png",
+    "scheme": "mescott",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "description": "Connect with skilled professionals for any task. Post jobs or offer your services on Ethiopia's leading marketplace platform.",
-    "platforms": ["ios", "android"],
-    "githubUrl": "https://github.com/yourusername/muyacon",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "githubUrl": "https://github.com/berbir12/muyacon1",
     "primaryColor": "#7B42F6",
     "splash": {
-      "image": "./frontend/assets/images/favicon.png",
+      "image": "./frontend/assets/images/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.muyacon.app",
+      "bundleIdentifier": "com.mescot.app",
       "buildNumber": "1",
       "infoPlist": {
         "NSCameraUsageDescription": "This app uses the camera to take photos for your profile and task images.",
@@ -28,19 +31,30 @@
         "NSMicrophoneUsageDescription": "This app uses the microphone for voice messages in chat.",
         "NSUserNotificationsUsageDescription": "This app sends notifications to keep you updated about your tasks and messages."
       },
-      "associatedDomains": ["applinks:muyacon.app"],
+      "associatedDomains": [
+        "applinks:mescott.app"
+      ],
       "config": {
         "usesNonExemptEncryption": false
       }
     },
     "android": {
-      "package": "com.muyacon.app",
+      "package": "com.mescott.app",
       "versionCode": 1,
       "adaptiveIcon": {
-        "foregroundImage": "./frontend/assets/images/favicon.png",
+        "foregroundImage": "./frontend/assets/images/adaptive-icon.png",
         "backgroundColor": "#7B42F6"
       },
       "edgeToEdgeEnabled": true,
+      "softwareKeyboardLayoutMode": "pan",
+      "navigationBar": {
+        "visible": "leanback",
+        "backgroundColor": "#000000"
+      },
+      "statusBar": {
+        "backgroundColor": "#ffffff",
+        "style": "dark"
+      },
       "permissions": [
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
@@ -66,7 +80,7 @@
         {
           "backgroundColor": "#ffffff",
           "resizeMode": "contain",
-          "image": "./frontend/assets/images/favicon.png"
+          "image": "./frontend/assets/images/splash.png"
         }
       ],
       [
@@ -79,7 +93,7 @@
       [
         "expo-notifications",
         {
-          "icon": "./frontend/assets/images/favicon.png",
+          "icon": "./frontend/assets/images/icon.png",
           "color": "#7B42F6",
           "defaultChannel": "default"
         }
@@ -89,9 +103,11 @@
       "typedRoutes": true
     },
     "extra": {
+      "router": {},
       "eas": {
-        "projectId": "8ec83a59-3621-4d2a-a6ac-5ad21b635920"
+        "projectId": "f91cc090-4170-45e2-b908-d4627e932855"
       }
-    }
+    },
+    "owner": "berbir"
   }
 }

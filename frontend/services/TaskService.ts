@@ -532,13 +532,33 @@ export class TaskService {
   }
 
   // Get featured tasks
+  // Featured tasks: Budget > 5000 ETB OR General Category tasks
   static async getFeaturedTasks(): Promise<Task[]> {
     try {
-      const { data, error } = await supabase
+      // First, get the General category ID
+      const { data: generalCategory } = await supabase
+        .from('task_categories')
+        .select('id')
+        .eq('name', 'General')
+        .single()
+
+      const generalCategoryId = generalCategory?.id
+
+      // Build query: tasks with budget > 5000 ETB OR General category
+      let query = supabase
         .from('tasks')
         .select('*')
         .eq('status', 'open')
-        .or('is_featured.eq.true,is_urgent.eq.true,budget.gte.1000')
+
+      // Build OR condition: budget > 5000 OR category = General
+      if (generalCategoryId) {
+        query = query.or(`budget.gt.5000,category_id.eq.${generalCategoryId}`)
+      } else {
+        // If General category not found, just filter by budget
+        query = query.gt('budget', 5000)
+      }
+
+      const { data, error } = await query
         .order('created_at', { ascending: false })
         .limit(10)
 
@@ -801,36 +821,37 @@ export class TaskService {
 
       console.log('✅ Task validation passed, proceeding with completion')
 
-      // Execute all operations in parallel for better performance
-      const operations = await Promise.allSettled([
-        // 1. Update task status
-        supabase
+      // 1. Update task status immediately (critical operation)
+      const { error: updateError } = await supabase
           .from('tasks')
           .update({
             status: 'completed',
             completed_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           })
-          .eq('id', taskId),
+        .eq('id', taskId)
 
-        // 2. Delete chat and messages (non-blocking)
-        this.deleteChatForCompletedTask(taskId),
-
-        // 3. Create payment requirement if needed
-        this.createPaymentForCompletedTask(task),
-
-        // 4. Send completion notifications
-        this.sendCompletionNotifications(task, completedBy)
-      ])
-
-      // Check if the main task update succeeded
-      const taskUpdateResult = operations[0]
-      if (taskUpdateResult.status === 'rejected') {
-        console.error('❌ Failed to update task status:', taskUpdateResult.reason)
-        throw taskUpdateResult.reason
+      if (updateError) {
+        console.error('❌ Failed to update task status:', updateError)
+        throw updateError
       }
 
-      console.log('✅ Task completion successful:', taskId)
+      console.log('✅ Task status updated successfully, returning immediately')
+
+      // 2-4. Execute non-critical operations in background (fire-and-forget)
+      Promise.allSettled([
+        // Delete chat and messages (non-blocking)
+        this.deleteChatForCompletedTask(taskId),
+        // Create payment requirement if needed
+        this.createPaymentForCompletedTask(task),
+        // Send completion notifications
+        this.sendCompletionNotifications(task, completedBy)
+      ]).catch(error => {
+        console.error('Error in background operations:', error)
+        // Don't fail the main operation if background operations fail
+      })
+
+      // Return immediately after task status update
       return true
 
     } catch (error) {
@@ -1129,6 +1150,87 @@ export class TaskService {
     }
 
     return results
+  }
+
+  // Update a task (only by owner)
+  static async updateTask(taskId: string, userId: string, updates: Partial<Task>): Promise<Task | null> {
+    try {
+      // First, verify the task exists and belongs to the user
+      const { data: existingTask, error: fetchError } = await supabase
+        .from('tasks')
+        .select('customer_id, status')
+        .eq('id', taskId)
+        .single()
+
+      if (fetchError) {
+        console.error('Error fetching task:', fetchError)
+        throw new Error('Task not found')
+      }
+
+      if (existingTask.customer_id !== userId) {
+        throw new Error('You do not have permission to update this task')
+      }
+
+      // Only allow updates for tasks that are in draft or open status
+      if (!['draft', 'open'].includes(existingTask.status)) {
+        throw new Error('Cannot update task that is already assigned or in progress')
+      }
+
+      // Update the task
+      const { data, error } = await supabase
+        .from('tasks')
+        .update({
+          ...updates,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', taskId)
+        .select()
+        .single()
+
+      if (error) throw error
+      return data as Task
+    } catch (error) {
+      console.error('Error updating task:', error)
+      throw error
+    }
+  }
+
+  // Delete a task (only by owner)
+  static async deleteTask(taskId: string, userId: string): Promise<boolean> {
+    try {
+      // First, verify the task exists and belongs to the user
+      const { data: task, error: fetchError } = await supabase
+        .from('tasks')
+        .select('customer_id, status')
+        .eq('id', taskId)
+        .single()
+
+      if (fetchError) {
+        console.error('Error fetching task:', fetchError)
+        throw new Error('Task not found')
+      }
+
+      if (task.customer_id !== userId) {
+        throw new Error('You do not have permission to delete this task')
+      }
+
+      // Allow deletion of draft or open (not yet assigned) tasks
+      if (!['draft', 'open', 'cancelled'].includes(task.status)) {
+        throw new Error('Cannot delete task in its current status')
+      }
+
+      // Delete the task
+      const { error } = await supabase
+        .from('tasks')
+        .delete()
+        .eq('id', taskId)
+
+      if (error) throw error
+      return true
+    } catch (error) {
+      console.error('Error deleting task:', error)
+      throw error
+    }
   }
 
   // Get task statistics for dashboard

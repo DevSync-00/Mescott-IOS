@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Alert,
   RefreshControl,
+  Modal,
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
@@ -19,6 +20,7 @@ import { WalletService, Wallet as WalletType, WalletTransaction, WalletStats } f
 import PaymentMethodModal from '../components/PaymentMethodModal'
 import WithdrawalModal from '../components/WithdrawalModal'
 import Colors from '../constants/Colors'
+import SkeletonLoader, { SkeletonList } from '../components/SkeletonLoader'
 
 export default function WalletScreen() {
   const { user, isAuthenticated, isLoading } = useAuth()
@@ -32,6 +34,7 @@ export default function WalletScreen() {
   const [withdrawalOrders, setWithdrawalOrders] = useState<WithdrawalOrder[]>([])
   const [showWithdrawalModal, setShowWithdrawalModal] = useState(false)
   const [showPaymentMethodModal, setShowPaymentMethodModal] = useState(false)
+  const [showAllPaymentMethods, setShowAllPaymentMethods] = useState(false)
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -86,6 +89,51 @@ export default function WalletScreen() {
     loadWalletData() // Refresh data
   }
 
+  const handleSetDefault = async (methodId: string) => {
+    if (!user) return
+    
+    try {
+      await PaymentMethodService.setDefaultPaymentMethod(user.user_id, methodId)
+      // Update local state
+      setPaymentMethods(prev =>
+        prev.map(method => ({
+          ...method,
+          is_default: method.id === methodId
+        }))
+      )
+      Alert.alert('Success', 'Default payment method updated')
+    } catch (error) {
+      console.error('Error setting default:', error)
+      Alert.alert('Error', 'Failed to set default payment method')
+    }
+  }
+
+  const handleDeletePaymentMethod = async (methodId: string, methodName: string) => {
+    if (!user) return
+    
+    Alert.alert(
+      'Delete Payment Method',
+      `Are you sure you want to delete ${methodName}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await PaymentMethodService.deletePaymentMethod(user.user_id, methodId)
+              setPaymentMethods(prev => prev.filter(method => method.id !== methodId))
+              Alert.alert('Success', 'Payment method deleted')
+            } catch (error) {
+              console.error('Error deleting payment method:', error)
+              Alert.alert('Error', 'Failed to delete payment method')
+            }
+          }
+        }
+      ]
+    )
+  }
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-ET', {
       style: 'currency',
@@ -132,8 +180,7 @@ export default function WalletScreen() {
           <View style={styles.headerRight} />
         </View>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary[500]} />
-          <Text style={styles.loadingText}>Loading wallet...</Text>
+          <SkeletonList count={3} />
         </View>
       </SafeAreaView>
     )
@@ -142,7 +189,7 @@ export default function WalletScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
+        <TouchableOpacity onPress={() => router.push('/profile')}>
           <Ionicons name="arrow-back" size={24} color={Colors.neutral[700]} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Wallet</Text>
@@ -264,15 +311,33 @@ export default function WalletScreen() {
                        'Cash Pickup'}
                     </Text>
                   </View>
-                  {method.is_default && (
-                    <View style={styles.defaultBadge}>
-                      <Text style={styles.defaultText}>Default</Text>
-                    </View>
-                  )}
+                  <View style={styles.paymentMethodActions}>
+                    {method.is_default ? (
+                      <View style={styles.defaultBadge}>
+                        <Text style={styles.defaultText}>Default</Text>
+                      </View>
+                    ) : (
+                      <TouchableOpacity
+                        style={styles.setDefaultButton}
+                        onPress={() => handleSetDefault(method.id)}
+                      >
+                        <Text style={styles.setDefaultText}>Set Default</Text>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
+                      style={styles.deleteButton}
+                      onPress={() => handleDeletePaymentMethod(method.id, method.display_name || 'this method')}
+                    >
+                      <Ionicons name="trash-outline" size={18} color={Colors.error[500]} />
+                    </TouchableOpacity>
+                  </View>
                 </View>
               ))}
               {paymentMethods.length > 3 && (
-                <TouchableOpacity style={styles.viewAllMethods}>
+                <TouchableOpacity 
+                  style={styles.viewAllMethods}
+                  onPress={() => setShowAllPaymentMethods(true)}
+                >
                   <Text style={styles.viewAllMethodsText}>
                     View All ({paymentMethods.length})
                   </Text>
@@ -317,6 +382,90 @@ export default function WalletScreen() {
         currentBalance={wallet?.balance || 0}
         userId={user?.user_id || ''}
       />
+
+      {/* All Payment Methods Modal */}
+      <Modal
+        visible={showAllPaymentMethods}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowAllPaymentMethods(false)}
+      >
+        <SafeAreaView style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={() => setShowAllPaymentMethods(false)}>
+              <Ionicons name="close" size={24} color={Colors.neutral[700]} />
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Payment Methods</Text>
+            <TouchableOpacity onPress={() => {
+              setShowAllPaymentMethods(false)
+              setShowPaymentMethodModal(true)
+            }}>
+              <Ionicons name="add" size={24} color={Colors.primary[500]} />
+            </TouchableOpacity>
+          </View>
+          
+          <ScrollView style={styles.modalContent}>
+            {paymentMethods.map((method) => (
+              <View key={method.id} style={styles.fullPaymentMethodItem}>
+                <View style={styles.paymentMethodIcon}>
+                  <Ionicons
+                    name={
+                      method.type === 'bank_account' ? 'card-outline' :
+                      method.type === 'mobile_money' ? 'phone-portrait-outline' :
+                      'location-outline'
+                    }
+                    size={24}
+                    color={Colors.primary[500]}
+                  />
+                </View>
+                <View style={styles.fullPaymentMethodInfo}>
+                  <Text style={styles.paymentMethodName}>{method.display_name}</Text>
+                  <Text style={styles.paymentMethodType}>
+                    {method.type === 'bank_account' ? 'Bank Account' :
+                     method.type === 'mobile_money' ? 'Mobile Money' :
+                     'Cash Pickup'}
+                  </Text>
+                  {method.withdrawal_details?.account_holder_name && (
+                    <Text style={styles.accountHolderName}>
+                      {method.withdrawal_details.account_holder_name}
+                    </Text>
+                  )}
+                </View>
+                <View style={styles.fullPaymentMethodActions}>
+                  {method.is_default ? (
+                    <View style={styles.defaultBadge}>
+                      <Text style={styles.defaultText}>Default</Text>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.setDefaultButtonLarge}
+                      onPress={() => handleSetDefault(method.id)}
+                    >
+                      <Text style={styles.setDefaultTextLarge}>Set Default</Text>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity
+                    style={styles.deleteButtonLarge}
+                    onPress={() => handleDeletePaymentMethod(method.id, method.display_name || 'this method')}
+                  >
+                    <Ionicons name="trash-outline" size={20} color={Colors.error[500]} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+            
+            {paymentMethods.length === 0 && (
+              <View style={styles.emptyState}>
+                <Ionicons name="card-outline" size={64} color={Colors.neutral[300]} />
+                <Text style={styles.emptyTitle}>No Payment Methods</Text>
+                <Text style={styles.emptySubtitle}>
+                  Add a payment method to withdraw your earnings
+                </Text>
+              </View>
+            )}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
 
     </SafeAreaView>
   )
@@ -591,17 +740,35 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.neutral[500],
   },
+  paymentMethodActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   defaultBadge: {
     backgroundColor: Colors.success[100],
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 4,
-    marginRight: 8,
   },
   defaultText: {
     fontSize: 10,
     color: Colors.success[600],
     fontWeight: '500',
+  },
+  setDefaultButton: {
+    backgroundColor: Colors.primary[50],
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  setDefaultText: {
+    fontSize: 10,
+    color: Colors.primary[600],
+    fontWeight: '500',
+  },
+  deleteButton: {
+    padding: 4,
   },
   viewAllMethods: {
     alignItems: 'center',
@@ -611,5 +778,69 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.primary[500],
     fontWeight: '500',
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: Colors.background.secondary,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border.primary,
+    backgroundColor: Colors.background.primary,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: Colors.neutral[700],
+  },
+  modalContent: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+  },
+  fullPaymentMethodItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.background.primary,
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  fullPaymentMethodInfo: {
+    flex: 1,
+  },
+  accountHolderName: {
+    fontSize: 11,
+    color: Colors.neutral[400],
+    marginTop: 2,
+  },
+  fullPaymentMethodActions: {
+    flexDirection: 'column',
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  setDefaultButtonLarge: {
+    backgroundColor: Colors.primary[500],
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  setDefaultTextLarge: {
+    fontSize: 12,
+    color: '#fff',
+    fontWeight: '500',
+  },
+  deleteButtonLarge: {
+    padding: 6,
   },
 })

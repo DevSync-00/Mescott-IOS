@@ -67,18 +67,18 @@ const faqData = {
       answer: 'Yes, downloading and using Mescott is completely free. We only charge a small service fee when tasks are completed successfully.'
     },
     {
-      question: 'How do I switch between customer and tasker mode?',
-      answer: 'Go to your profile settings and tap "Switch Mode". You can be both a customer and tasker, but you can only be in one mode at a time.'
+      question: 'How do I become a tasker?',
+      answer: 'Go to Settings > Work > Become a Tasker and fill out the application form. You\'ll need to provide your skills, experience, and upload ID verification documents. Once approved, you can start accepting tasks.'
     }
   ],
   'account': [
     {
       question: 'How do I verify my profile?',
-      answer: 'Go to Profile > Verification and upload your ID document. Verified profiles get more trust from other users and appear higher in search results.'
+      answer: 'Profile verification is part of the tasker application process. When you apply to become a tasker, you\'ll upload ID documents for verification. Verified taskers get more trust from customers.'
     },
     {
       question: 'Can I change my phone number?',
-      answer: 'Yes, go to Profile > Settings > Account Info and tap "Change Phone Number". You\'ll need to verify the new number with an SMS code.'
+      answer: 'Phone number changes are currently not available in the app. Please contact support if you need to update your phone number.'
     },
     {
       question: 'How do I update my profile information?',
@@ -91,8 +91,8 @@ const faqData = {
   ],
   'payments': [
     {
-      question: 'How do I add a payment method?',
-      answer: 'Go to Wallet > Payment Methods and tap "Add Payment Method". You can add bank accounts, mobile money, or set up cash pickup locations.'
+      question: 'How do payments work?',
+      answer: 'Payments are processed securely through Chapa payment gateway. When you post a task, payment is held securely. Once the task is completed, the tasker receives payment after 24 hours.'
     },
     {
       question: 'Is my payment information secure?',
@@ -100,11 +100,11 @@ const faqData = {
     },
     {
       question: 'How do I withdraw my earnings?',
-      answer: 'Go to Wallet > Withdraw and select your preferred withdrawal method. You can withdraw to your bank account, mobile money, or pick up cash at our office.'
+      answer: 'Earnings are automatically transferred to your payment method after task completion. Withdrawal methods are configured during the tasker application process.'
     },
     {
       question: 'What payment methods are accepted?',
-      answer: 'We accept bank transfers, mobile money (Telebirr, M-Pesa), and cash pickup. All major Ethiopian banks are supported.'
+      answer: 'We accept payments through Chapa, which supports bank transfers, mobile money (Telebirr, M-Pesa), and other Ethiopian payment methods.'
     },
     {
       question: 'When will I receive my payment?',
@@ -114,23 +114,31 @@ const faqData = {
   'tasks': [
     {
       question: 'How do I post a task?',
-      answer: 'Tap the "+" button on the home screen, select "Post Task", fill in the task details including description, location, budget, and timeline, then publish your task.'
+      answer: 'Go to the Home tab and tap "Post a Task" or navigate to the Tasks tab and tap the "+" button. Fill in the task details including title, description, category, location, budget, and timeline, then publish your task.'
     },
     {
-      question: 'How do I find taskers?',
-      answer: 'Browse the "Find Taskers" section, use filters to narrow down by skills, location, and price range, then review profiles and ratings before making a choice.'
+      question: 'How do I browse available tasks?',
+      answer: 'Go to the Tasks tab and select the "Available" tab. You can filter tasks by category, budget, location, and other criteria. Tap on any task to see details and apply.'
     },
     {
       question: 'How do I apply for tasks?',
-      answer: 'Browse available tasks, tap on one you\'re interested in, read the details, and tap "Apply". Write a brief message explaining why you\'re the right person for the job.'
+      answer: 'Browse available tasks in the Tasks tab, tap on a task you\'re interested in, read the details, and tap "Apply". You\'ll need to provide your proposed price and estimated completion time.'
+    },
+    {
+      question: 'How do I view my tasks?',
+      answer: 'Go to the Tasks tab and select the "My Tasks" tab. Here you can see all tasks you\'ve posted, filter them by category, and manage their status.'
+    },
+    {
+      question: 'How do I view my bookings?',
+      answer: 'If you\'re a tasker, go to the Bookings tab to see all tasks you\'ve been assigned or applied to. You can filter by status (pending, completed) and manage your bookings.'
     },
     {
       question: 'Can I cancel a task?',
-      answer: 'Yes, you can cancel tasks before they start. If you cancel after the tasker has started, cancellation fees may apply. Check our cancellation policy for details.'
+      answer: 'Yes, you can cancel tasks before they are assigned. Once a task is assigned to a tasker, contact support if you need to cancel. Cancellation fees may apply.'
     },
     {
       question: 'How do I rate and review?',
-      answer: 'After a task is completed, you\'ll receive a notification to rate and review. Tap on the notification or go to the completed task to leave your feedback.'
+      answer: 'After a task is completed, you\'ll receive a notification to rate and review. Go to the completed task or booking to leave your feedback and rating.'
     }
   ],
   'safety': [
@@ -154,19 +162,19 @@ const faqData = {
   'technical': [
     {
       question: 'The app is not working properly. What should I do?',
-      answer: 'Try closing and reopening the app, check your internet connection, and make sure you have the latest version. If problems persist, contact our technical support.'
+      answer: 'Try closing and reopening the app, check your internet connection, and make sure you have the latest version. If problems persist, contact our technical support through the Contact Us page.'
     },
     {
       question: 'I\'m not receiving notifications. How do I fix this?',
-      answer: 'Go to your phone settings > Apps > Mescott > Notifications and make sure notifications are enabled. Also check that you\'ve allowed notifications in the app.'
+      answer: 'Go to your phone settings > Apps > Mescott > Notifications and make sure notifications are enabled. The app uses notifications for new messages, task updates, and booking confirmations.'
     },
     {
       question: 'How do I update the app?',
-      answer: 'Go to your app store (Google Play or App Store), search for Mescott, and tap "Update" if an update is available.'
+      answer: 'Go to your app store (Google Play or App Store), search for Mescott, and tap "Update" if an update is available. You can also enable automatic updates in your app store settings.'
     },
     {
-      question: 'The app is using too much data. How can I reduce it?',
-      answer: 'Go to Settings > Data Usage and enable "Data Saver" mode. This will reduce image quality and limit background data usage.'
+      question: 'How do I contact support?',
+      answer: 'Go to Settings > Support > Contact Us to send a message, or use the email/phone options at the bottom of the Help page. Our support team will respond within 24 hours.'
     }
   ]
 }
@@ -212,7 +220,12 @@ export default function HelpScreen() {
         <View style={styles.headerRight} />
       </View>
 
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        style={styles.content} 
+        showsVerticalScrollIndicator={false} 
+        bounces={true} 
+        alwaysBounceVertical={true}
+      >
         {/* Search */}
         <View style={styles.searchSection}>
           <View style={styles.searchContainer}>

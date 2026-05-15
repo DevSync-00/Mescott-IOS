@@ -109,8 +109,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingVertical: 16,
-    minHeight: 60,
+    paddingTop: 8,
+    paddingBottom: 12,
+    minHeight: 52,
   },
   defaultHeader: {
     borderBottomWidth: 1,

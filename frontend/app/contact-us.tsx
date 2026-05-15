@@ -138,7 +138,7 @@ export default function ContactUs() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['bottom', 'left', 'right']}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.push('/settings')} style={styles.backButton}>
@@ -152,6 +152,9 @@ export default function ContactUs() {
         style={styles.content} 
         showsVerticalScrollIndicator={true}
         contentContainerStyle={styles.scrollContent}
+        bounces={true}
+        alwaysBounceVertical={true}
+        scrollEventThrottle={16}
       >
         {/* Quick Actions */}
         <View style={styles.quickActions}>

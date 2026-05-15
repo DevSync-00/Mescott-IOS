@@ -116,6 +116,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const sendVerificationCode = async (phone: string, isSignUp = false, fullName = '', username = '') => {
     const normalized = normalizePhone(phone);
+    console.log('📱 SEND OTP - Original phone:', phone);
+    console.log('📱 SEND OTP - Normalized phone:', normalized);
+    console.log('📱 SEND OTP - Phone length:', normalized.length);
+    console.log('📱 SEND OTP - Phone format check (E.164):', /^\+[1-9]\d{1,14}$/.test(normalized));
+    console.log('📱 SEND OTP - IsSignUp:', isSignUp);
 
     // Save signup info if it's a sign-up attempt
     if (isSignUp) {
@@ -124,18 +129,68 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
     // Send OTP without checking user existence first
     // We'll check during verification phase
-    const { error } = await supabase.auth.signInWithOtp({ phone: normalized });
-    if (error) return { success: false, message: error.message };
+    console.log('📱 SEND OTP - Calling signInWithOtp with:', { phone: normalized });
+    const { data, error } = await supabase.auth.signInWithOtp({ phone: normalized });
+    
+    console.log('📱 SEND OTP - Response data:', JSON.stringify(data, null, 2));
+    console.log('📱 SEND OTP - Full response:', { data, error });
+    if (data) {
+      console.log('📱 SEND OTP - Check if test code is in response:', {
+        message: data.message,
+        code: data.code,
+        token: data.token
+      });
+    }
+    console.log('📱 SEND OTP - Error:', error);
+    
+    if (error) {
+      console.error('📱 SEND OTP - Error details:', {
+        message: error.message,
+        status: error.status,
+        name: error.name,
+        phone_sent: normalized,
+        is_twilio_error: error.message?.includes('Twilio') || error.message?.includes('twilio')
+      });
+      
+      // Check if it's a Twilio authentication error
+      if (error.message?.includes('Twilio') || error.message?.includes('Authenticate') || error.status === 422) {
+        console.error('⚠️ TWILIO ERROR DETECTED - This means Supabase is trying to use Twilio instead of test mode.');
+        console.error('⚠️ POSSIBLE CAUSES:');
+        console.error('   1. Test phone number format mismatch in Supabase dashboard');
+        console.error('   2. Test phone number not exactly matching:', normalized);
+        console.error('   3. Twilio credentials still configured (even with test numbers, Supabase might try Twilio first)');
+        console.error('⚠️ SOLUTION: Verify in Supabase Dashboard → Auth → Settings → Phone Auth');
+        console.error('   - Test number must be EXACTLY:', normalized);
+        console.error('   - Check for any spaces, different formats, or missing + sign');
+      }
+      
+      return { success: false, message: error.message };
+    }
+    
+    console.log('✅ SEND OTP - Success');
     return { success: true, message: 'Verification code sent' };
   };
 
   const verifyPhoneCode = async (phone: string, code: string) => {
     try {
       const normalized = normalizePhone(phone);
+      console.log('🔐 VERIFY OTP - Phone:', normalized, 'Code:', code);
+      console.log('🔐 VERIFY OTP - Code length:', code.length);
+      
       const { data, error } = await supabase.auth.verifyOtp({ phone: normalized, token: code, type: 'sms' });
 
+      console.log('🔐 VERIFY OTP - Response data:', data);
+      console.log('🔐 VERIFY OTP - Error:', error);
+
       if (error) {
-        console.error('OTP verification error:', error);
+        console.error('❌ OTP verification error:', {
+          message: error.message,
+          status: error.status,
+          name: error.name,
+          code: code,
+          phone: normalized,
+          timestamp: new Date().toISOString()
+        });
         return { success: false, message: error.message };
       }
 

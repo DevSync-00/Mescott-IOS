@@ -150,10 +150,16 @@ export class ChapaPaymentService {
         return emailRegex.test(email) && email.length <= 254 && !email.includes('..') && !email.startsWith('.') && !email.endsWith('.')
       }
 
-      // Always use a known working email for Chapa (they're very strict)
-      const validEmail = 'test@gmail.com' // Use a known working email
-      
-      console.warn(`Using known working email for Chapa: ${validEmail}`)
+      // Use the real customer email in live mode; fail fast if invalid.
+      const validEmail = String(customerInfo.email || '').trim().toLowerCase()
+      if (!validateEmail(validEmail)) {
+        return {
+          success: false,
+          error: 'Please provide a valid customer email before initializing payment.',
+          checkoutUrl: null,
+          txRef: null
+        }
+      }
 
       // Prepare Chapa payment request
       const paymentRequest: ChapaPaymentRequest = {
@@ -181,15 +187,20 @@ export class ChapaPaymentService {
         }
       }
 
-      // Check if API credentials are configured
-      if (!CHAPA_CONFIG.secretKey || CHAPA_CONFIG.secretKey.includes('xxxxxxxxxxxxxxxxxxxxxxxx') || CHAPA_CONFIG.secretKey === 'CHASECK_TEST-your_secret_key_here') {
+      // Check if API credentials are configured and not test-mode credentials.
+      if (
+        !CHAPA_CONFIG.secretKey ||
+        CHAPA_CONFIG.secretKey.includes('xxxxxxxxxxxxxxxxxxxxxxxx') ||
+        CHAPA_CONFIG.secretKey === 'CHASECK_TEST-your_secret_key_here' ||
+        CHAPA_CONFIG.secretKey.includes('_TEST')
+      ) {
         console.error('❌ Chapa API credentials not configured')
         console.error('Please create a .env file in the frontend directory with:')
-        console.error('EXPO_PUBLIC_CHAPA_SECRET_KEY=your_actual_secret_key')
+        console.error('EXPO_PUBLIC_CHAPA_SECRET_KEY=your_live_secret_key')
         console.error('Get your keys from: https://dashboard.chapa.co/')
         return {
           success: false,
-          error: 'Chapa API credentials not configured. Please set EXPO_PUBLIC_CHAPA_SECRET_KEY in your environment variables.',
+          error: 'Chapa live API credentials not configured. Please set EXPO_PUBLIC_CHAPA_SECRET_KEY to a live key.',
           checkoutUrl: null,
           txRef: null
         }

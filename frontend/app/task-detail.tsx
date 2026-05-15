@@ -19,9 +19,12 @@ import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useAuth } from '../contexts/SimpleAuthContext'
 import { TaskService, Task } from '../services/TaskService'
 import { TaskApplicationService } from '../services/TaskApplicationService'
+import { PaymentService } from '../services/PaymentService'
+import ChapaPaymentModal from '../components/ChapaPaymentModal'
 import TaskStatusManager from '../components/TaskStatusManager'
 import Header from '../components/Header'
 import Colors from '../constants/Colors'
+import SkeletonLoader, { SkeletonCard } from '../components/SkeletonLoader'
 
 const { width } = Dimensions.get('window')
 
@@ -35,6 +38,9 @@ export default function TaskDetail() {
   const [applying, setApplying] = useState(false)
   const [imageModalVisible, setImageModalVisible] = useState(false)
   const [selectedImageIndex, setSelectedImageIndex] = useState(0)
+  const [pendingPayments, setPendingPayments] = useState<any[]>([])
+  const [showPaymentModal, setShowPaymentModal] = useState(false)
+  const [selectedPayment, setSelectedPayment] = useState<any>(null)
 
   useEffect(() => {
     // Only redirect to auth if we're sure the user is not authenticated
@@ -46,6 +52,7 @@ export default function TaskDetail() {
     
     if (isAuthenticated && taskId) {
       loadTaskDetails()
+      loadPendingPayments()
     }
   }, [taskId, isAuthenticated, isLoading])
 
@@ -54,8 +61,8 @@ export default function TaskDetail() {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary[500]} />
-          <Text style={styles.loadingText}>Loading...</Text>
+          <SkeletonCard style={{ marginBottom: 16 }} />
+          <SkeletonCard />
         </View>
       </SafeAreaView>
     )
@@ -97,11 +104,135 @@ export default function TaskDetail() {
     }
   }
 
+  const loadPendingPayments = async () => {
+    if (!user) return
+
+    try {
+      const payments = await PaymentService.getPendingPayments(user.id)
+      setPendingPayments(payments)
+    } catch (error) {
+      console.error('Error loading pending payments:', error)
+    }
+  }
+
+  const hasPendingPayment = (task: Task) => {
+    const hasPayment = pendingPayments.some(p => p.task_id === task.id)
+    console.log('🔍 Payment Debug:', {
+      taskId: task.id,
+      taskStatus: task.status,
+      pendingPayments: pendingPayments.length,
+      hasPayment,
+      payments: pendingPayments.map(p => ({ task_id: p.task_id, amount: p.amount }))
+    })
+    return hasPayment
+  }
+
+  const handlePayNow = async (task: Task) => {
+    if (!user || !task.id) return
+
+    // Find the pending payment for this task
+    const pendingPayment = pendingPayments.find(p => p.task_id === task.id)
+    
+    if (!pendingPayment) {
+      Alert.alert('Error', 'No pending payment found for this task')
+      return
+    }
+
+    // Get customer info for Chapa payment
+    const customerInfo = {
+      email: user.profile?.email || 'customer@mescott.com',
+      firstName: user.name?.split(' ')[0] || 'Customer',
+      lastName: user.name?.split(' ').slice(1).join(' ') || 'User',
+      phone: user.phone || '+251911234567'
+    }
+
+    console.log('Customer Info for Payment:', customerInfo)
+    console.log('User Data:', { email: user.profile?.email, name: user.name, phone: user.phone })
+
+    setSelectedPayment(pendingPayment)
+    setShowPaymentModal(true)
+  }
+
+  const handlePaymentSuccess = (payment: any) => {
+    loadPendingPayments() // Reload pending payments
+    loadTaskDetails() // Reload task details to update status
+    setShowPaymentModal(false)
+    setSelectedPayment(null)
+  }
+
+  const handleEditTask = () => {
+    if (!task || !user) return
+    
+    router.push({
+      pathname: '/post-task',
+      params: { 
+        taskId: task.id,
+        editMode: 'true'
+      }
+    })
+  }
+
+  const handleDeleteTask = () => {
+    if (!task || !user) return
+
+    Alert.alert(
+      'Delete Task',
+      'Are you sure you want to delete this task? This action cannot be undone.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel'
+        },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await TaskService.deleteTask(task.id, user.id)
+              Alert.alert('Success', 'Task deleted successfully')
+              router.push('/jobs')
+            } catch (error: any) {
+              console.error('Error deleting task:', error)
+              // Fallback: if deletion is restricted by DB policy (e.g., published/applications), cancel the task instead
+              try {
+                await TaskService.updateTask(task.id, user.id, { status: 'cancelled' } as any)
+                Alert.alert('Task Cancelled', 'The task could not be deleted, so it was cancelled instead.')
+                router.push('/jobs')
+              } catch (e: any) {
+                Alert.alert('Error', e?.message || 'Failed to delete or cancel task')
+              }
+            }
+          }
+        }
+      ]
+    )
+  }
+
   const handleApply = async () => {
     if (!user || !task) return
 
     // Check if this is the user's own task
     if (task.customer_id === user.id) {
+      // If task is completed, handle payment
+      if (task.status === 'completed') {
+        // Check if there's a pending payment
+        if (hasPendingPayment(task)) {
+          handlePayNow(task)
+        } else {
+          // If no pending payment found, reload payments and try again
+          await loadPendingPayments()
+          if (hasPendingPayment(task)) {
+            handlePayNow(task)
+          } else {
+            Alert.alert(
+              'Payment Not Ready',
+              'The payment for this completed task is being processed. Please try again in a moment.'
+            )
+          }
+        }
+        return
+      }
+      
       console.log('Navigating to applications for task:', task.id)
       // Navigate to applications view for task owners
       router.push(`/task-applications?taskId=${task.id}`)
@@ -194,8 +325,8 @@ export default function TaskDetail() {
           onBackPress={() => router.push('/jobs')}
         />
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary[500]} />
-          <Text style={styles.loadingText}>Loading task details...</Text>
+          <SkeletonCard style={{ marginBottom: 16 }} />
+          <SkeletonCard />
         </View>
       </SafeAreaView>
     )
@@ -231,7 +362,9 @@ export default function TaskDetail() {
         showsVerticalScrollIndicator={true}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.scrollContent}
-        bounces={true}
+        bounces={false}
+        alwaysBounceVertical={false}
+        overScrollMode="never"
         scrollEventThrottle={16}
       >
         {/* Task Header */}
@@ -384,8 +517,30 @@ export default function TaskDetail() {
         </View>
       </ScrollView>
 
-      {/* Apply Button */}
+      {/* Footer Buttons */}
       <View style={styles.footer}>
+        {/* Edit and Delete buttons for task owner */}
+        {task.customer_id === user?.id && (task.status === 'open' || task.status === 'draft') && (
+          <View style={styles.actionButtons}>
+            <TouchableOpacity 
+              style={[styles.actionButton, styles.editButton]}
+              onPress={handleEditTask}
+            >
+              <Ionicons name="pencil" size={20} color="#fff" />
+              <Text style={styles.actionButtonText}>Edit</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.actionButton, styles.deleteButton]}
+              onPress={handleDeleteTask}
+            >
+              <Ionicons name="trash" size={20} color="#fff" />
+              <Text style={styles.actionButtonText}>Delete</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Main action button */}
         <TouchableOpacity 
           style={[
             styles.applyButton,
@@ -395,15 +550,19 @@ export default function TaskDetail() {
           disabled={applying}
         >
           {applying ? (
-            <ActivityIndicator size="small" color="#fff" />
+            <View style={{ width: 20, height: 20 }}>
+              <SkeletonLoader width={20} height={20} borderRadius={10} />
+            </View>
           ) : (
             <Text style={[
               styles.applyButtonText,
               hasApplied && styles.appliedButtonText
             ]}>
               {task.customer_id === user?.id 
-                ? 'View Applications' 
-                : (hasApplied ? 'Already Applied' : 'Apply Now')
+                ? (task.status === 'completed' 
+                    ? 'Pay Now' 
+                    : 'View Applications')
+                : (hasApplied ? 'Already Applied' : 'Apply')
               }
             </Text>
           )}
@@ -462,6 +621,23 @@ export default function TaskDetail() {
           )}
         </View>
       </Modal>
+
+      {/* Payment Modal */}
+      <ChapaPaymentModal
+        visible={showPaymentModal}
+        onClose={() => {
+          setShowPaymentModal(false)
+          setSelectedPayment(null)
+        }}
+        payment={selectedPayment}
+        onPaymentSuccess={handlePaymentSuccess}
+        customerInfo={{
+          email: user?.profile?.email || 'customer@mescott.com',
+          firstName: user?.name?.split(' ')[0] || 'Customer',
+          lastName: user?.name?.split(' ').slice(1).join(' ') || 'User',
+          phone: user?.phone || '+251911234567'
+        }}
+      />
     </SafeAreaView>
   )
 }
@@ -478,7 +654,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 100,
+    paddingBottom: 120, // Increased padding to ensure content is visible above footer
+    flexGrow: 1, // Ensure content can grow to fill available space
   },
   loadingContainer: {
     flex: 1,
@@ -595,6 +772,31 @@ const styles = StyleSheet.create({
     padding: 20,
     borderTopWidth: 1,
     borderTopColor: Colors.border.light,
+    gap: 12,
+  },
+  actionButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  actionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  editButton: {
+    backgroundColor: Colors.primary[500],
+  },
+  deleteButton: {
+    backgroundColor: Colors.error[500],
+  },
+  actionButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   applyButton: {
     backgroundColor: Colors.primary[500],

@@ -11,6 +11,7 @@ import { useLocalSearchParams, router } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { PaymentService } from '../services/PaymentService'
 import Colors from '../constants/Colors'
+import SkeletonLoader from '../components/SkeletonLoader'
 
 export default function PaymentSuccessScreen() {
   const { tx_ref } = useLocalSearchParams<{ tx_ref: string }>()
@@ -114,8 +115,8 @@ export default function PaymentSuccessScreen() {
     return (
       <View style={styles.container}>
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={Colors.primary[500]} />
-          <Text style={styles.loadingText}>Verifying payment...</Text>
+          <SkeletonLoader width={60} height={60} borderRadius={30} style={{ marginBottom: 16 }} />
+          <SkeletonLoader width={200} height={20} />
         </View>
       </View>
     )

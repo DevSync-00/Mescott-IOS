@@ -291,22 +291,20 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 40,
+    paddingVertical: 60,
   },
   emptyTitle: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '600',
-    color: Colors.neutral[700],
+    color: Colors.neutral[600],
     marginTop: 16,
     marginBottom: 8,
   },
   emptySubtitle: {
-    fontSize: 16,
+    fontSize: 14,
     color: Colors.neutral[500],
     textAlign: 'center',
-    lineHeight: 22,
+    paddingHorizontal: 40,
   },
 })
