@@ -1,562 +1,464 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  TextInput,
   Alert,
-  KeyboardAvoidingView,
   Platform,
   Dimensions,
-  Keyboard,
-  TouchableWithoutFeedback,
+  Animated,
+  ActivityIndicator,
+  Modal,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Ionicons } from '@expo/vector-icons'
+import { Ionicons, FontAwesome } from '@expo/vector-icons'
 import { useRouter } from 'expo-router'
 import { useAuth } from '../contexts/SimpleAuthContext'
 import Colors from '../constants/Colors'
+import * as WebBrowser from 'expo-web-browser'
+import { Linking } from 'react-native'
+import { TelegramAuthService } from '../services/TelegramAuthService'
 
+const { width } = Dimensions.get('window')
 
 export default function Auth() {
   const router = useRouter()
-  const [isSignUp, setIsSignUp] = useState(false)
-  const [fullName, setFullName] = useState('')
-  const [username, setUsername] = useState('')
-  const [phoneNumber, setPhoneNumber] = useState('')
-  const [verificationCode, setVerificationCode] = useState('')
-  const [isCodeSent, setIsCodeSent] = useState(false)
   const [loading, setLoading] = useState(false)
-  const [countdown, setCountdown] = useState(0)
-  const { sendVerificationCode, verifyPhoneCode, isAuthenticated } = useAuth()
+  const [awaitingAuth, setAwaitingAuth] = useState(false)
+  const [telegramLinks, setTelegramLinks] = useState<{
+    session_token: string;
+    telegram_link: string;
+    fallback_link: string;
+  } | null>(null)
+  const [unsubscribeFn, setUnsubscribeFn] = useState<(() => void) | null>(null)
+  
+  const [pulseAnim] = useState(new Animated.Value(1))
+  const { initiateTelegramAuth, handleTelegramLogin, isAuthenticated } = useAuth()
 
   // Redirect away if already authenticated
-  React.useEffect(() => {
+  useEffect(() => {
     if (isAuthenticated) {
       router.replace('/')
     }
   }, [isAuthenticated])
 
-  // Reset auth state when user logs out
-  React.useEffect(() => {
-    if (!isAuthenticated) {
-      setVerificationCode('')
-      setIsCodeSent(false)
-      setLoading(false)
-      setCountdown(0)
+  // Clean up subscriptions and animations on unmount
+  useEffect(() => {
+    return () => {
+      if (unsubscribeFn) {
+        unsubscribeFn()
+      }
     }
-  }, [isAuthenticated])
+  }, [unsubscribeFn])
 
-  const startCountdown = () => {
-    setCountdown(60)
-    const interval = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval)
-          return 0
-        }
-        return prev - 1
+  // Logo Pulse animation during awaiting verification state
+  useEffect(() => {
+    let pulseAnimation: Animated.CompositeAnimation | null = null
+
+    if (awaitingAuth) {
+      pulseAnimation = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1.15,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 1.0,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+        ])
+      )
+      pulseAnimation.start()
+    } else {
+      pulseAnim.setValue(1)
+    }
+
+    return () => {
+      if (pulseAnimation) {
+        pulseAnimation.stop()
+      }
+    }
+  }, [awaitingAuth])
+
+  const handleTelegramAuth = async () => {
+    setLoading(true)
+    try {
+      // 1. Call backend API to initiate session token and get deep links
+      const result = await initiateTelegramAuth({
+        platform: Platform.OS,
+        version: Platform.Version,
+        timestamp: new Date().toISOString()
       })
-    }, 1000)
-  }
 
-  const cleanPhoneNumber = (phone: string) => {
-    let cleaned = phone.replace(/\D/g, '')
-    if (cleaned.startsWith('0')) {
-      cleaned = '251' + cleaned.substring(1)
-    }
-    if (!cleaned.startsWith('251')) {
-      cleaned = '251' + cleaned
-    }
-    return '+' + cleaned
-  }
-
-  const handleSendCode = async () => {
-    if (isSignUp) {
-      if (!fullName.trim()) {
-        Alert.alert('Error', 'Please enter your full name')
+      if (!result || !result.success) {
+        Alert.alert('Error', 'Failed to initiate Telegram login. Please try again.')
         return
       }
 
-      if (!username.trim()) {
-        Alert.alert('Error', 'Please enter a username')
-        return
-      }
-    }
+      setTelegramLinks(result)
+      setAwaitingAuth(true)
 
-    if (!phoneNumber.trim()) {
-      Alert.alert('Error', 'Please enter your phone number')
-      return
-    }
+      // 2. Setup Realtime listener for the generated session token
+      const unsubscribe = TelegramAuthService.subscribeToAuthStatus(
+        result.session_token,
+        async (payload) => {
+          console.log('🎉 AUTH SUCCESS - Received JWT session tokens')
+          
+          // Clean up subscription & close modal
+          if (unsubscribe) unsubscribe()
+          setAwaitingAuth(false)
+          setLoading(false)
 
-    const formattedPhone = cleanPhoneNumber(phoneNumber)
-    
-    if (formattedPhone.length !== 13) {
-      Alert.alert('Error', 'Please enter a valid 9-digit phone number (e.g., 0912345678)')
-      return
-    }
-
-    console.log('📲 AUTH SCREEN - Requesting OTP for:', formattedPhone, 'at', new Date().toISOString())
-    setLoading(true)
-    
-    try {
-      const result = await sendVerificationCode(formattedPhone, isSignUp, fullName, username)
-      
-      if (result.success) {
-        console.log('✅ AUTH SCREEN - OTP sent successfully at', new Date().toISOString())
-        Alert.alert('Success', result.message)
-        setIsCodeSent(true)
-        startCountdown()
-      } else {
-        console.error('❌ AUTH SCREEN - Failed to send OTP:', result.message)
-        Alert.alert('Error', result.message)
-      }
-    } catch (error: any) {
-      console.error('❌ AUTH SCREEN - Exception in handleSendCode:', error);
-      Alert.alert('Error', error.message || 'Failed to send verification code. Please try again.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleVerifyCode = async () => {
-    if (verificationCode.length !== 6) {
-      Alert.alert('Error', 'Please enter the 6-digit verification code')
-      return
-    }
-
-    const formattedPhone = cleanPhoneNumber(phoneNumber)
-    console.log('🔍 AUTH SCREEN - Attempting verification:', {
-      phone: formattedPhone,
-      code: verificationCode,
-      codeLength: verificationCode.length,
-      timestamp: new Date().toISOString(),
-      countdownRemaining: countdown
-    })
-
-    setLoading(true)
-    try {
-      const result = await verifyPhoneCode(formattedPhone, verificationCode)
-      
-      if (result.success) {
-        console.log('✅ AUTH SCREEN - Verification successful at', new Date().toISOString())
-        Alert.alert('Success', result.message)
-        
-        // Reset form state
-        setVerificationCode('')
-        setIsCodeSent(false)
-        setPhoneNumber('')
-        setFullName('')
-        setUsername('')
-        // Navigation will be handled by the layout redirect
-      } else {
-        console.error('❌ AUTH SCREEN - Verification failed:', result.message)
-        Alert.alert('Error', result.message)
-      }
-    } catch (error: any) {
-      console.error('❌ AUTH SCREEN - Exception in handleVerifyCode:', error)
-      Alert.alert('Error', error.message || 'Verification failed. Please try again.')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleResendCode = async () => {
-    if (countdown === 0) {
-      setLoading(true)
-      try {
-        const formattedPhone = cleanPhoneNumber(phoneNumber)
-        const result = await sendVerificationCode(formattedPhone, isSignUp, fullName, username)
-        
-        if (result.success) {
-          setVerificationCode('')
-          setIsCodeSent(false)
-          Alert.alert('Success', 'New verification code sent')
-          startCountdown()
-        } else {
-          Alert.alert('Error', result.message)
+          try {
+            await handleTelegramLogin(payload)
+            // Navigation automatically triggered by isAuthenticated useEffect
+          } catch (loginErr: any) {
+            Alert.alert('Login Error', loginErr.message || 'Failed to establish session.')
+          }
         }
-      } catch (error: any) {
-        Alert.alert('Error', error.message || 'Failed to resend verification code')
-      } finally {
-        setLoading(false)
+      )
+      setUnsubscribeFn(() => unsubscribe)
+
+      // Set timeout for 5 minutes (300 seconds)
+      const timeoutId = setTimeout(() => {
+        Alert.alert('Session Expired', 'Verification session expired. Please try again.')
+        unsubscribe()
+        setAwaitingAuth(false)
+        setTelegramLinks(null)
+      }, 300000)
+
+      // 3. Trigger OS intent to open native Telegram App
+      const canOpen = await Linking.canOpenURL(result.telegram_link)
+      if (canOpen) {
+        await Linking.openURL(result.telegram_link)
+      } else {
+        // Fallback Scenario 1: Telegram App is not installed, open web link in-app
+        console.log('Telegram native link failed, opening web fallback link in-app WebBrowser')
+        await WebBrowser.openBrowserAsync(result.fallback_link)
       }
+
+    } catch (err: any) {
+      console.error('Error in handleTelegramAuth:', err)
+      Alert.alert('Error', err.message || 'An unexpected error occurred.')
+      setAwaitingAuth(false)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleCancelAuth = () => {
+    if (unsubscribeFn) {
+      unsubscribeFn()
+      setUnsubscribeFn(null)
+    }
+    setAwaitingAuth(false)
+    setTelegramLinks(null)
+    setLoading(false)
+  }
+
+  const handleOpenTelegramWeb = async () => {
+    if (telegramLinks?.fallback_link) {
+      await WebBrowser.openBrowserAsync(telegramLinks.fallback_link)
     }
   }
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.background}>
-        <KeyboardAvoidingView 
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.keyboardView}
+      <View style={styles.content}>
+        {/* Header Logo */}
+        <View style={styles.header}>
+          <View style={styles.logoContainer}>
+            <Ionicons name="sparkles" size={42} color="#FFFFFF" />
+          </View>
+          <Text style={styles.title}>MESCOTT</Text>
+          <Text style={styles.subtitle}>Frictionless Login with Telegram</Text>
+        </View>
+
+        {/* Action Button */}
+        <View style={styles.actionContainer}>
+          <TouchableOpacity
+            style={[styles.tgButton, loading && styles.tgButtonDisabled]}
+            onPress={handleTelegramAuth}
+            disabled={loading}
+          >
+            <FontAwesome name="telegram" size={24} color="#FFFFFF" style={styles.buttonIcon} />
+            <Text style={styles.tgButtonText}>
+              {loading ? 'INITIALIZING...' : 'CONTINUE WITH TELEGRAM'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* How It Works Guide */}
+        <View style={styles.guideCard}>
+          <Text style={styles.guideTitle}>How it works</Text>
+          
+          <View style={styles.guideStep}>
+            <View style={styles.stepBadge}><Text style={styles.stepBadgeText}>1</Text></View>
+            <Text style={styles.guideText}>Tap the button above</Text>
+          </View>
+
+          <View style={styles.guideStep}>
+            <View style={styles.stepBadge}><Text style={styles.stepBadgeText}>2</Text></View>
+            <Text style={styles.guideText}>Click "Start" in the Telegram bot</Text>
+          </View>
+
+          <View style={styles.guideStep}>
+            <View style={styles.stepBadge}><Text style={styles.stepBadgeText}>3</Text></View>
+            <Text style={styles.guideText}>Return to Mescott automatically</Text>
+          </View>
+        </View>
+
+        {/* Terms Footer */}
+        <View style={styles.footer}>
+          <Text style={styles.footerText}>
+            By continuing, you agree to our Terms & Conditions and Privacy Policy.
+          </Text>
+        </View>
+
+        {/* Awaiting Authentication Overlay Modal */}
+        <Modal
+          visible={awaitingAuth}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={handleCancelAuth}
         >
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-            <View style={styles.content}>
-              {/* Header */}
-              <View style={styles.header}>
-                <View style={styles.iconContainer}>
-                  <Ionicons name="phone-portrait" size={40} color="#FFFFFF" />
-                </View>
-                <Text style={styles.title}>
-                  {isSignUp ? 'Create Account' : 'Welcome Back'}
-                </Text>
-                <Text style={styles.subtitle}>
-                  {isCodeSent
-                    ? `Enter the 6-digit code sent to ${phoneNumber}`
-                    : isSignUp 
-                      ? 'Enter your details to get started'
-                      : 'Sign in to continue to your account'}
-                </Text>
-              </View>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Animated.View style={[styles.pulseLogo, { transform: [{ scale: pulseAnim }] }]}>
+                <Ionicons name="sparkles" size={36} color="#FFFFFF" />
+              </Animated.View>
 
-              {/* Auth Mode Toggle */}
-              {!isCodeSent && (
-                <View style={styles.authToggle}>
-                  <TouchableOpacity
-                    style={[styles.toggleButton, !isSignUp && styles.toggleButtonActive]}
-                    onPress={() => setIsSignUp(false)}
-                  >
-                    <Text style={[styles.toggleText, !isSignUp && styles.toggleTextActive]}>
-                      Sign In
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.toggleButton, isSignUp && styles.toggleButtonActive]}
-                    onPress={() => setIsSignUp(true)}
-                  >
-                    <Text style={[styles.toggleText, isSignUp && styles.toggleTextActive]}>
-                      Sign Up
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              )}
+              <Text style={styles.modalTitle}>Awaiting Authentication</Text>
+              
+              <ActivityIndicator size="large" color="#24A1DE" style={styles.spinner} />
+              
+              <Text style={styles.modalDescription}>
+                Waiting for Telegram approval...{"\n"}please do not close Mescott.
+              </Text>
 
+              <Text style={styles.modalInstruction}>
+                Ensure you click "Start" inside the Telegram app.
+              </Text>
 
-              {/* Form */}
-              <View style={styles.form}>
-                {!isCodeSent ? (
-                  <>
-                    {isSignUp && (
-                      <>
-                        <View style={styles.inputContainer}>
-                          <Ionicons name="person-outline" size={20} color="#6F4685" />
-                          <TextInput
-                            style={styles.input}
-                            placeholder="Full name"
-                            placeholderTextColor="#AAAAAA"
-                            value={fullName}
-                            onChangeText={setFullName}
-                            autoFocus
-                            returnKeyType="next"
-                          />
-                        </View>
+              <TouchableOpacity style={styles.bypassButton} onPress={handleOpenTelegramWeb}>
+                <Text style={styles.bypassButtonText}>App didn't switch? Open Telegram Web</Text>
+              </TouchableOpacity>
 
-                        <View style={styles.inputContainer}>
-                          <Ionicons name="at" size={20} color="#6F4685" />
-                          <TextInput
-                            style={styles.input}
-                            placeholder="Username"
-                            placeholderTextColor="#AAAAAA"
-                            value={username}
-                            onChangeText={setUsername}
-                            returnKeyType="next"
-                          />
-                        </View>
-                      </>
-                    )}
-
-                    <View style={styles.inputContainer}>
-                      <Ionicons name="call-outline" size={20} color="#6F4685" />
-                      <TextInput
-                        style={styles.input}
-                        placeholder="Phone number"
-                        placeholderTextColor="#AAAAAA"
-                        value={phoneNumber}
-                        onChangeText={setPhoneNumber}
-                        keyboardType="phone-pad"
-                        returnKeyType="done"
-                        onSubmitEditing={Keyboard.dismiss}
-                        editable={true}
-                        selectTextOnFocus={true}
-                        autoFocus={!isSignUp}
-                      />
-                    </View>
-                    
-                    <TouchableOpacity
-                      style={[styles.button, loading && styles.buttonDisabled]}
-                      onPress={handleSendCode}
-                      disabled={loading}
-                    >
-                      <Text style={styles.buttonText}>
-                        {loading 
-                          ? 'Sending...' 
-                          : isSignUp 
-                            ? 'Continue' 
-                            : 'Continue'
-                        }
-                      </Text>
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  <>
-                    <TouchableOpacity
-                      style={styles.backToPhoneButton}
-                      onPress={() => {
-                        setIsCodeSent(false)
-                        setVerificationCode('')
-                      }}
-                    >
-                      <Ionicons name="arrow-back" size={20} color="#6F4685" />
-                      <Text style={styles.backToPhoneText}>Change phone number</Text>
-                    </TouchableOpacity>
-
-                    <View style={styles.inputContainer}>
-                      <Ionicons name="lock-closed-outline" size={20} color="#6F4685" />
-                      <TextInput
-                        style={styles.input}
-                        placeholder="6-digit code"
-                        placeholderTextColor="#AAAAAA"
-                        value={verificationCode}
-                        onChangeText={setVerificationCode}
-                        keyboardType="number-pad"
-                        maxLength={6}
-                        autoFocus
-                        returnKeyType="done"
-                        onSubmitEditing={Keyboard.dismiss}
-                      />
-                    </View>
-                    
-                    <TouchableOpacity
-                      style={[styles.button, loading && styles.buttonDisabled]}
-                      onPress={handleVerifyCode}
-                      disabled={loading}
-                    >
-                      <Text style={styles.buttonText}>
-                        {loading ? 'Verifying...' : 'Verify & Continue'}
-                      </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={styles.doneButton}
-                      onPress={Keyboard.dismiss}
-                    >
-                      <Text style={styles.doneButtonText}>Done</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={[styles.resendButton, countdown > 0 && styles.resendButtonDisabled]}
-                      onPress={handleResendCode}
-                      disabled={countdown > 0}
-                    >
-                      <Text style={[styles.resendText, countdown > 0 && styles.resendTextDisabled]}>
-                        {countdown > 0 ? `Resend in ${countdown}s` : 'Resend Code'}
-                      </Text>
-                    </TouchableOpacity>
-                  </>
-                )}
-              </View>
-
-              {/* Footer */}
-              <View style={styles.footer}>
-                <Text style={styles.footerText}>
-                  By continuing, you agree to our Terms of Service and Privacy Policy
-                </Text>
-              </View>
+              <TouchableOpacity style={styles.cancelButton} onPress={handleCancelAuth}>
+                <Text style={styles.cancelButtonText}>Cancel & Retry</Text>
+              </TouchableOpacity>
             </View>
-          </TouchableWithoutFeedback>
-        </KeyboardAvoidingView>
+          </View>
+        </Modal>
       </View>
     </SafeAreaView>
   )
 }
-
-const SECONDARY_COLOR = '#6F4685'
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FFFFFF',
   },
-  background: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-  },
-  keyboardView: {
-    flex: 1,
-    width: '100%',
-    justifyContent: 'center',
-  },
   content: {
-    width: '100%',
-    maxWidth: 420,
+    flex: 1,
+    paddingHorizontal: 24,
+    justifyContent: 'space-between',
     alignItems: 'center',
+    paddingVertical: 40,
   },
   header: {
     alignItems: 'center',
-    marginBottom: 48,
+    marginTop: 40,
   },
-  iconContainer: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: SECONDARY_COLOR,
+  logoContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#7B42F6', // Mescott Brand Accent
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 20,
+    shadowColor: '#7B42F6',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 5,
   },
   title: {
-    fontSize: 32,
-    fontWeight: '700',
+    fontSize: 28,
+    fontWeight: 'bold',
     color: '#1A1A1A',
-    marginBottom: 12,
-    textAlign: 'center',
+    letterSpacing: 2,
+    marginBottom: 8,
   },
   subtitle: {
-    fontSize: 15,
+    fontSize: 16,
     color: '#666666',
     textAlign: 'center',
-    lineHeight: 22,
-    paddingHorizontal: 20,
   },
-  devCodeContainer: {
-    backgroundColor: '#F5F5F5',
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 20,
-  },
-  devCodeLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: SECONDARY_COLOR,
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  devCode: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: SECONDARY_COLOR,
-    textAlign: 'center',
-    letterSpacing: 4,
-  },
-  form: {
+  actionContainer: {
     width: '100%',
-    marginBottom: 32,
+    alignItems: 'center',
+    marginVertical: 20,
   },
-  inputContainer: {
+  tgButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    marginBottom: 16,
-    height: 54,
-    borderWidth: 1.5,
-    borderColor: '#E5E5E5',
-  },
-  input: {
-    flex: 1,
-    fontSize: 16,
-    color: '#1A1A1A',
-    marginLeft: 12,
-  },
-  button: {
-    alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: SECONDARY_COLOR,
-    paddingVertical: 16,
-    borderRadius: 12,
-    marginTop: 8,
+    backgroundColor: '#24A1DE', // Telegram Brand Blue
+    width: '100%',
+    maxWidth: 320,
+    height: 54,
+    borderRadius: 27,
+    shadowColor: '#24A1DE',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  buttonDisabled: {
-    backgroundColor: '#CCCCCC',
+  tgButtonDisabled: {
+    backgroundColor: '#179CDE', // Pressed/disabled state
+    opacity: 0.7,
   },
-  buttonText: {
+  buttonIcon: {
+    marginRight: 10,
+  },
+  tgButtonText: {
     color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: 'bold',
+    letterSpacing: 1,
+  },
+  guideCard: {
+    backgroundColor: '#F8F9FA',
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 320,
+    borderWidth: 1,
+    borderColor: '#EFEFEF',
+  },
+  guideTitle: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: 'bold',
+    color: '#333333',
+    marginBottom: 16,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
   },
-  resendButton: {
-    marginTop: 20,
+  guideStep: {
+    flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
+    marginBottom: 16,
   },
-  resendButtonDisabled: {
-    opacity: 0.5,
-  },
-  resendText: {
-    color: SECONDARY_COLOR,
-    fontSize: 15,
-    fontWeight: '500',
-  },
-  resendTextDisabled: {
-    color: '#999999',
-  },
-  doneButton: {
-    marginTop: 12,
+  stepBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#E0E0E0',
+    justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 8,
+    marginRight: 12,
   },
-  doneButtonText: {
+  stepBadgeText: {
+    fontSize: 12,
+    fontWeight: 'bold',
     color: '#666666',
-    fontSize: 15,
+  },
+  guideText: {
+    fontSize: 14,
+    color: '#555555',
     fontWeight: '500',
   },
   footer: {
-    alignItems: 'center',
-    paddingTop: 24,
+    width: '100%',
+    paddingHorizontal: 20,
   },
   footerText: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#999999',
     textAlign: 'center',
     lineHeight: 18,
   },
-  authToggle: {
-    flexDirection: 'row',
-    backgroundColor: '#F8F8F8',
-    borderRadius: 10,
-    padding: 4,
-    marginBottom: 32,
-    width: '100%',
-  },
-  toggleButton: {
+  modalOverlay: {
     flex: 1,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  toggleButtonActive: {
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  toggleText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#999999',
-  },
-  toggleTextActive: {
-    color: SECONDARY_COLOR,
-  },
-  backToPhoneButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)', // Dimmed Overlay
     justifyContent: 'center',
-    paddingVertical: 12,
-    marginBottom: 24,
-    gap: 6,
+    alignItems: 'center',
+    paddingHorizontal: 24,
   },
-  backToPhoneText: {
-    color: SECONDARY_COLOR,
-    fontSize: 15,
-    fontWeight: '500',
+  modalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 32,
+    alignItems: 'center',
+    width: '100%',
+    maxWidth: 340,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  pulseLogo: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: '#7B42F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1A1A1A',
+    marginBottom: 20,
+  },
+  spinner: {
+    marginBottom: 20,
+  },
+  modalDescription: {
+    fontSize: 14,
+    color: '#666666',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 8,
+  },
+  modalInstruction: {
+    fontSize: 13,
+    color: '#999999',
+    fontWeight: '600',
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  bypassButton: {
+    paddingVertical: 10,
+    marginBottom: 16,
+  },
+  bypassButtonText: {
+    fontSize: 13,
+    color: '#24A1DE',
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  cancelButton: {
+    borderWidth: 1.5,
+    borderColor: '#E0E0E0',
+    borderRadius: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    width: '100%',
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 14,
+    color: '#666666',
+    fontWeight: 'bold',
   },
 })

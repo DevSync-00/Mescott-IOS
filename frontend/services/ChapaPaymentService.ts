@@ -363,7 +363,7 @@ export class ChapaPaymentService {
   }
 
   // Process successful payment and credit tasker wallet
-  private static async processSuccessfulPayment(
+  public static async processSuccessfulPayment(
     txRef: string,
     taskerId: string,
     amount: number,
@@ -379,6 +379,20 @@ export class ChapaPaymentService {
 
       if (profileError || !taskerProfile) {
         throw new Error('Tasker profile not found')
+      }
+
+      // Check if this payment was already processed (to avoid duplicate credits)
+      const { data: existingTx, error: checkError } = await supabase
+        .from('transactions')
+        .select('id')
+        .eq('user_id', taskerProfile.user_id)
+        .eq('type', 'deposit')
+        .eq('metadata->>tx_ref', txRef)
+        .maybeSingle()
+
+      if (existingTx) {
+        console.log(`Payment with tx_ref ${txRef} already processed for wallet credit. Skipping duplicate credit.`)
+        return
       }
 
       // Get or create tasker wallet

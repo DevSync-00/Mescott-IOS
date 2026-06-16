@@ -475,8 +475,8 @@ export class PaymentService {
         customerInfo
       )
 
-      if (!result) {
-        throw new Error('Failed to initialize payment')
+      if (!result || !result.checkoutUrl || !result.txRef) {
+        throw new Error(result && 'error' in result ? (result as any).error : 'Failed to initialize payment')
       }
 
       // Calculate payment breakdown for display
@@ -501,6 +501,19 @@ export class PaymentService {
     breakdown: any
   } | null> {
     try {
+      // First check Chapa directly to get the real-time status
+      const verification = await ChapaPaymentService.verifyPayment(txRef)
+      
+      if (verification && verification.data.status === 'success') {
+        // If Chapa says success, we can return completed status
+        return {
+          status: 'completed',
+          amount: verification.data.amount,
+          breakdown: verification.data.meta?.breakdown
+        }
+      }
+
+      // Fallback to checking local database
       return await ChapaPaymentService.getPaymentStatus(txRef)
     } catch (error) {
       const appError = handleError(error, 'verifyChapaPayment')
@@ -516,6 +529,16 @@ export class PaymentService {
       const verification = await ChapaPaymentService.verifyPayment(txRef)
       if (!verification || verification.data.status !== 'success') {
         throw new Error('Payment verification failed')
+      }
+
+      // If payment successful, process wallet credit for tasker
+      if (verification.data.meta?.tasker_id) {
+        await ChapaPaymentService.processSuccessfulPayment(
+          txRef,
+          verification.data.meta.tasker_id,
+          verification.data.amount,
+          verification.data.meta
+        ).catch(err => console.error('Error crediting tasker wallet:', err))
       }
 
       // Update payment status in database

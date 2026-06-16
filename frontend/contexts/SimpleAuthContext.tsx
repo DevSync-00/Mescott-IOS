@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SimpleUserProfile } from '../types/SimpleUserProfile';
 import { ProfileSyncService } from '../services/ProfileSyncService';
+import { TelegramAuthService, TelegramAuthResponse } from '../services/TelegramAuthService';
 
 interface AuthContextType {
   user: SimpleUserProfile | null;
@@ -15,6 +16,8 @@ interface AuthContextType {
   logout: () => Promise<void>;
   refreshUserProfile: () => Promise<void>;
   switchMode: () => Promise<void>;
+  initiateTelegramAuth: (deviceInfo?: any) => Promise<TelegramAuthResponse | null>;
+  handleTelegramLogin: (jwtPayload: any) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -46,7 +49,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       } = await supabase.auth.getSession();
 
       if (sessionError) {
-        console.error('Session error:', sessionError);
+        console.error('Session error during init:', sessionError);
+        try {
+          await supabase.auth.signOut();
+          await AsyncStorage.clear();
+        } catch (clearError) {
+          console.error('Error clearing session storage:', clearError);
+        }
         setUser(null);
         return;
       }
@@ -57,7 +66,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         } catch (profileError) {
           console.error('Profile loading error:', profileError);
           // If profile doesn't exist, sign out the user
-          await supabase.auth.signOut();
+          try {
+            await supabase.auth.signOut();
+            await AsyncStorage.clear();
+          } catch (clearError) {
+            console.error('Error clearing session storage after profile error:', clearError);
+          }
           setUser(null);
         }
       } else {
@@ -65,6 +79,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       }
     } catch (err) {
       console.error('Auth init error:', err);
+      try {
+        await supabase.auth.signOut();
+        await AsyncStorage.clear();
+      } catch (clearError) {
+        console.error('Error clearing session storage after init error:', clearError);
+      }
       setUser(null);
     } finally {
       setLoading(false);
@@ -315,6 +335,46 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       await AsyncStorage.clear();
   };
 
+  const initiateTelegramAuth = async (deviceInfo: any = {}) => {
+    try {
+      setLoading(true);
+      const result = await TelegramAuthService.initiateTelegramAuth(deviceInfo);
+      return result;
+    } catch (err) {
+      console.error('Error initiating Telegram auth:', err);
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTelegramLogin = async (jwtPayload: any) => {
+    try {
+      console.log('🔑 TELEGRAM LOGIN - Handling login payload');
+      const { access_token, refresh_token } = jwtPayload;
+
+      // Set session in Supabase Auth
+      const { data, error } = await supabase.auth.setSession({
+        access_token,
+        refresh_token
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      console.log('🔑 TELEGRAM LOGIN - Session set successfully for user:', data.user?.id);
+      
+      // Load user profile
+      if (data.user) {
+        await loadUserProfile(data.user.id);
+      }
+    } catch (err) {
+      console.error('Error handling Telegram login callback:', err);
+      throw err;
+    }
+  };
+
   const switchMode = async () => {
     if (!user) {
       console.log('🚀 SWITCH MODE - No user found');
@@ -370,6 +430,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     logout,
     refreshUserProfile,
     switchMode,
+    initiateTelegramAuth,
+    handleTelegramLogin,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
