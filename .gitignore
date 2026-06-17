@@ -97,3 +97,4 @@ expo-env.d.ts
 # @end expo-cli
 frontend/.env
 webhook-server/.env
+frontend/.env

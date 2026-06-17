@@ -1,7 +1,7 @@
 import { supabase } from '../lib/supabase';
 
-// Get API URL from environment variables
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'https://mchapaw.vercel.app';
+// Get API URL from environment variables, stripping any trailing slash
+const API_URL = (process.env.EXPO_PUBLIC_API_URL || 'https://mchapaw.vercel.app').replace(/\/$/, '');
 
 export interface TelegramAuthResponse {
   success: boolean;
