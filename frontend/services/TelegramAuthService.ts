@@ -1,7 +1,11 @@
 import { supabase } from '../lib/supabase';
 
-// Get API URL from environment variables, stripping any trailing slash
-const API_URL = (process.env.EXPO_PUBLIC_API_URL || 'https://mchapaw.vercel.app').replace(/\/$/, '');
+// Strip trailing slash so URL concatenation never produces double slashes
+const API_URL = (process.env.EXPO_PUBLIC_API_URL || '').replace(/\/+$/, '');
+
+if (!API_URL) {
+  console.warn('[TelegramAuthService] EXPO_PUBLIC_API_URL is not set');
+}
 
 export interface TelegramAuthResponse {
   success: boolean;
@@ -11,56 +15,83 @@ export interface TelegramAuthResponse {
 }
 
 export class TelegramAuthService {
-  // Initiate Telegram Auth and fetch the deep links
-  static async initiateTelegramAuth(deviceInfo: any = {}): Promise<TelegramAuthResponse | null> {
+  /**
+   * Call the backend to create a pending auth session.
+   * Returns the session token and Telegram deep links.
+   */
+  static async initiateTelegramAuth(deviceInfo: Record<string, any> = {}): Promise<TelegramAuthResponse | null> {
+    const url = `${API_URL}/api/auth/telegram/initiate`;
+    console.log('[TelegramAuthService] POST', url);
+
     try {
-      const response = await fetch(`${API_URL}/api/auth/telegram/initiate`, {
+      const response = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deviceInfo }),
       });
 
+      const text = await response.text();
+
       if (!response.ok) {
-        let errorDetails = '';
-        try {
-          errorDetails = await response.text();
-        } catch (_) {}
-        throw new Error(`Failed to initiate Telegram auth: HTTP ${response.status} ${response.statusText || ''} - ${errorDetails}`);
+        console.error(`[TelegramAuthService] HTTP ${response.status}:`, text);
+        throw new Error(`Failed to initiate Telegram auth: HTTP ${response.status} — ${text}`);
       }
 
-      const data: TelegramAuthResponse = await response.json();
+      const data: TelegramAuthResponse = JSON.parse(text);
+
+      if (!data.success || !data.session_token) {
+        console.error('[TelegramAuthService] Unexpected response:', data);
+        throw new Error('Invalid response from auth server');
+      }
+
+      console.log('[TelegramAuthService] Session created:', data.session_token.substring(0, 8) + '...');
       return data;
     } catch (error) {
-      console.error('Error in initiateTelegramAuth:', error);
+      console.error('[TelegramAuthService] initiateTelegramAuth failed:', error);
       return null;
     }
   }
 
-  // Subscribe to the Supabase Realtime channel for AUTH_SUCCESS event
-  static subscribeToAuthStatus(sessionToken: string, onAuthSuccess: (payload: any) => void): () => void {
-    console.log(`Subscribing to realtime channel for session: ${sessionToken}`);
-    
-    // 1. Subscribe to broadcast event
-    const channel = supabase.channel(`auth:${sessionToken}`, {
-      config: {
-        broadcast: { self: false }
-      }
+  /**
+   * Subscribe to AUTH_SUCCESS for a given session token.
+   * Uses two channels for redundancy:
+   *   1. Supabase Realtime broadcast  (fast path — pushed by bot webhook)
+   *   2. Postgres DB change listener  (fallback — polls the row update)
+   *
+   * Returns an unsubscribe function.
+   */
+  static subscribeToAuthStatus(
+    sessionToken: string,
+    onAuthSuccess: (payload: any) => void
+  ): () => void {
+    console.log('[TelegramAuthService] Subscribing to session:', sessionToken.substring(0, 8) + '...');
+
+    let settled = false;
+
+    const handleSuccess = (payload: any) => {
+      if (settled) return;
+      settled = true;
+      console.log('[TelegramAuthService] AUTH_SUCCESS received');
+      onAuthSuccess(payload);
+    };
+
+    // ── Channel 1: Realtime broadcast ──────────────────────────────────────
+    const broadcastChannel = supabase.channel(`auth:${sessionToken}`, {
+      config: { broadcast: { self: false } },
     });
 
-    channel
-      .on('broadcast', { event: 'AUTH_SUCCESS' }, (payload) => {
-        console.log('Received auth success via broadcast:', payload);
-        onAuthSuccess(payload.payload);
+    broadcastChannel
+      .on('broadcast', { event: 'AUTH_SUCCESS' }, (msg) => {
+        console.log('[TelegramAuthService] Broadcast received');
+        handleSuccess(msg.payload);
       })
       .subscribe((status) => {
-        console.log(`Realtime channel status: ${status}`);
+        console.log('[TelegramAuthService] Broadcast channel status:', status);
       });
 
-    // 2. Also subscribe to database changes for auth_pending_sessions table as fallback
-    const dbSubscription = supabase
-      .channel(`auth_pending_sessions_db:${sessionToken}`)
+    // ── Channel 2: DB row change (fallback) ────────────────────────────────
+    const dbChannel = supabase
+      .channel(`auth_db:${sessionToken}`)
       .on(
         'postgres_changes',
         {
@@ -69,20 +100,22 @@ export class TelegramAuthService {
           table: 'auth_pending_sessions',
           filter: `session_token=eq.${sessionToken}`,
         },
-        (payload) => {
-          console.log('Received database update for session:', payload.new);
-          if (payload.new && payload.new.status === 'APPROVED' && payload.new.jwt_payload) {
-            onAuthSuccess(payload.new.jwt_payload);
+        (event) => {
+          console.log('[TelegramAuthService] DB change received:', event.new?.status);
+          const row = event.new as any;
+          if (row?.status === 'APPROVED' && row?.jwt_payload) {
+            handleSuccess(row.jwt_payload);
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('[TelegramAuthService] DB channel status:', status);
+      });
 
-    // Return unsubscribe function
     return () => {
-      console.log(`Unsubscribing from channels for session: ${sessionToken}`);
-      supabase.removeChannel(channel);
-      supabase.removeChannel(dbSubscription);
+      console.log('[TelegramAuthService] Unsubscribing from session:', sessionToken.substring(0, 8) + '...');
+      supabase.removeChannel(broadcastChannel);
+      supabase.removeChannel(dbChannel);
     };
   }
 }

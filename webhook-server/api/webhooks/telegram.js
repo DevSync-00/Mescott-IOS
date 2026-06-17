@@ -1,329 +1,334 @@
 const { createClient } = require('@supabase/supabase-js');
 const crypto = require('crypto');
 
-// Initialize Supabase Admin client
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// Helper to send Telegram messages
-async function sendTelegramMessage(chatId, text, replyMarkup = null) {
+// Send a message via Telegram Bot API
+async function sendMessage(chatId, text, replyMarkup = null) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) {
-    console.warn('⚠️ TELEGRAM_BOT_TOKEN not configured, skipping sendTelegramMessage');
+    console.warn('[telegram] TELEGRAM_BOT_TOKEN not set — skipping message');
     return;
   }
+  const body = { chat_id: chatId, text, parse_mode: 'HTML' };
+  if (replyMarkup) body.reply_markup = replyMarkup;
+
   try {
-    const body = { chat_id: chatId, text };
-    if (replyMarkup) {
-      body.reply_markup = replyMarkup;
-    }
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
-    const result = await response.json();
-    console.log('Telegram send message result:', result);
+    const json = await res.json();
+    if (!json.ok) console.error('[telegram] sendMessage failed:', json);
   } catch (err) {
-    console.error('Error sending message to Telegram:', err);
+    console.error('[telegram] sendMessage error:', err.message);
   }
 }
 
-// Helper to generate a secure deterministic password for Supabase Auth
-function generateUserPassword(chatId) {
-  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || 'mescott-default-auth-secret-1234';
-  return crypto
-    .createHmac('sha256', secret)
-    .update(String(chatId))
-    .digest('hex');
+// Deterministic password derived from chatId — same secret as used when user was created
+function derivePassword(chatId) {
+  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || 'mescott-fallback-secret';
+  return crypto.createHmac('sha256', secret).update(String(chatId)).digest('hex');
 }
 
+// Broadcast AUTH_SUCCESS via Supabase Realtime and persist jwt_payload to DB
+async function approveSession(sessionToken, userId, jwtPayload) {
+  // 1. Update DB row to APPROVED
+  const { error: updateError } = await supabaseAdmin
+    .from('auth_pending_sessions')
+    .update({ status: 'APPROVED', user_id: userId, jwt_payload: jwtPayload })
+    .eq('session_token', sessionToken);
+
+  if (updateError) {
+    console.error('[telegram] Failed to update session to APPROVED:', updateError.message);
+    return false;
+  }
+
+  // 2. Broadcast via Supabase Realtime so the mobile app gets the event immediately
+  try {
+    const channel = supabaseAdmin.channel(`auth:${sessionToken}`);
+    await new Promise((resolve) => {
+      channel.subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await channel.send({
+            type: 'broadcast',
+            event: 'AUTH_SUCCESS',
+            payload: jwtPayload,
+          });
+          console.log(`[telegram] Broadcasted AUTH_SUCCESS for session ${sessionToken.substring(0, 8)}...`);
+          await supabaseAdmin.removeChannel(channel);
+          resolve();
+        }
+      });
+    });
+  } catch (broadcastErr) {
+    // Non-fatal — the DB fallback in TelegramAuthService will catch it
+    console.warn('[telegram] Realtime broadcast failed (DB fallback will handle it):', broadcastErr.message);
+  }
+
+  return true;
+}
+
+// Find or create Supabase Auth user + profile, then sign them in
+async function authenticateUser(phone, chatId, username, contact) {
+  const password = derivePassword(chatId);
+
+  // Try sign-in first (user may already exist)
+  const { data: signInData, error: signInError } = await supabaseAdmin.auth.signInWithPassword({
+    phone,
+    password,
+  });
+
+  if (!signInError && signInData?.session) {
+    // Existing user — update telegram fields on their profile
+    await supabaseAdmin
+      .from('profiles')
+      .update({ telegram_chat_id: String(chatId), telegram_username: username, updated_at: new Date().toISOString() })
+      .eq('user_id', signInData.user.id);
+
+    const { data: profile } = await supabaseAdmin
+      .from('profiles')
+      .select('*')
+      .eq('user_id', signInData.user.id)
+      .maybeSingle();
+
+    return { session: signInData.session, user: signInData.user, profile };
+  }
+
+  // User doesn't exist — create them
+  console.log('[telegram] User not found, creating new account for phone:', phone);
+
+  const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
+    phone,
+    password,
+    phone_confirm: true,
+  });
+
+  if (createError && !createError.message.includes('already registered')) {
+    console.error('[telegram] Failed to create user:', createError.message);
+    return null;
+  }
+
+  // Sign in with the newly created user
+  const { data: freshSignIn, error: freshSignInError } = await supabaseAdmin.auth.signInWithPassword({
+    phone,
+    password,
+  });
+
+  if (freshSignInError || !freshSignIn?.session) {
+    console.error('[telegram] Sign-in after creation failed:', freshSignInError?.message);
+    return null;
+  }
+
+  const userId = freshSignIn.user.id;
+  const fullName = [contact?.first_name, contact?.last_name].filter(Boolean).join(' ') || 'Telegram User';
+
+  // Create profile row
+  const { data: profile, error: profileError } = await supabaseAdmin
+    .from('profiles')
+    .insert([{
+      user_id: userId,
+      full_name: fullName,
+      username: username || `tg_${chatId}`,
+      phone,
+      telegram_chat_id: String(chatId),
+      telegram_username: username,
+      role: 'customer',
+      current_mode: 'customer',
+    }])
+    .select()
+    .single();
+
+  if (profileError) {
+    console.error('[telegram] Profile creation error:', profileError.message);
+    // Profile creation failed but auth is fine — return what we have
+    return { session: freshSignIn.session, user: freshSignIn.user, profile: null };
+  }
+
+  return { session: freshSignIn.session, user: freshSignIn.user, profile };
+}
+
+// ─── Main handler ────────────────────────────────────────────────────────────
+
 module.exports = async function handler(req, res) {
-  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return res.status(405).json({ success: false, error: 'Method not allowed' });
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, error: 'Method not allowed' });
-  }
+  // Telegram always expects 200 from webhook — respond immediately, process async
+  res.status(200).json({ ok: true });
 
   try {
     const payload = req.body;
-    console.log('Received Telegram Webhook:', JSON.stringify(payload, null, 2));
+    if (!payload?.message) return;
 
-    if (payload.message) {
-      const { chat, text, contact, from } = payload.message;
-      const chatId = chat.id;
-      const username = from.username || '';
+    const { message } = payload;
+    const chatId = message.chat.id;
+    const from = message.from || {};
+    const username = from.username || '';
+    const text = message.text || '';
+    const contact = message.contact;
 
-      // Handle shared contact (phone number)
-      if (contact) {
-        if (String(contact.user_id) !== String(from.id)) {
-          await sendTelegramMessage(chatId, '⚠️ Verification failed: You must share your own contact.');
-          return res.status(200).json({ success: false, error: 'User ID mismatch' });
-        }
+    console.log(`[telegram] Received message from chatId=${chatId} username=${username}`);
 
-        const rawPhone = contact.phone_number;
-        const phone = rawPhone.startsWith('+') ? rawPhone : `+${rawPhone}`;
+    // ── /start <token> ──────────────────────────────────────────────────────
+    if (text.startsWith('/start')) {
+      const token = text.split(' ')[1];
 
-        // Find the pending session matching this Telegram chat ID
-        const { data: sessionRow, error: sessionError } = await supabaseAdmin
-          .from('auth_pending_sessions')
-          .select('*')
-          .eq('status', 'PENDING')
-          .eq('device_info->>telegram_chat_id', String(chatId))
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
+      if (!token) {
+        await sendMessage(chatId, 'Welcome to Mescott!\n\nPlease use the <b>Continue with Telegram</b> button in the Mescott app to sign in.');
+        return;
+      }
 
-        if (sessionError || !sessionRow) {
-          console.error('No pending session found for chat ID:', chatId, sessionError);
-          await sendTelegramMessage(chatId, '❌ No pending login session found. Please start login from the Mescott app.');
-          return res.status(200).json({ success: false, error: 'No pending session' });
-        }
+      // Look up the pending session
+      const { data: session, error: sessionError } = await supabaseAdmin
+        .from('auth_pending_sessions')
+        .select('*')
+        .eq('session_token', token)
+        .maybeSingle();
 
-        const sessionToken = sessionRow.session_token;
-        const password = generateUserPassword(chatId);
+      if (sessionError || !session) {
+        await sendMessage(chatId, '❌ Invalid or expired login link. Please try again from the Mescott app.');
+        return;
+      }
 
-        let { data: profile } = await supabaseAdmin
-          .from('profiles')
-          .select('*')
-          .eq('phone', phone)
-          .maybeSingle();
+      if (session.status !== 'PENDING') {
+        await sendMessage(chatId, '⚠️ This login session has already been used. Please start a new one from the app.');
+        return;
+      }
 
-        let userId;
+      const ageSeconds = (Date.now() - new Date(session.created_at).getTime()) / 1000;
+      if (ageSeconds > 300) {
+        await supabaseAdmin.from('auth_pending_sessions').update({ status: 'EXPIRED' }).eq('session_token', token);
+        await sendMessage(chatId, '⌛ This login session has expired (5 min limit). Please try again from the app.');
+        return;
+      }
 
-        if (profile) {
-          userId = profile.user_id;
-          await supabaseAdmin
-            .from('profiles')
-            .update({
-              telegram_chat_id: String(chatId),
-              telegram_username: username,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', profile.id);
-        } else {
-          try {
-            const { data: newUser, error: signUpError } = await supabaseAdmin.auth.admin.createUser({
-              phone: phone,
-              password: password,
-              phone_confirm: true
-            });
+      // Save chatId + username into device_info so the contact handler can match sessions
+      await supabaseAdmin
+        .from('auth_pending_sessions')
+        .update({ device_info: { ...session.device_info, telegram_chat_id: String(chatId), telegram_username: username } })
+        .eq('session_token', token);
 
-            if (signUpError) {
-              if (signUpError.message.includes('already exists') || signUpError.status === 422) {
-                console.log('User auth already exists, proceeding to login');
-              } else {
-                throw signUpError;
-              }
-            } else {
-              userId = newUser.user.id;
-            }
-          } catch (createErr) {
-            console.error('Error creating user:', createErr);
-          }
-        }
+      // If we already know this Telegram user (returning user), authenticate immediately
+      const { data: existingProfile } = await supabaseAdmin
+        .from('profiles')
+        .select('*')
+        .eq('telegram_chat_id', String(chatId))
+        .maybeSingle();
 
-        const { data: authData, error: signInError } = await supabaseAdmin.auth.signInWithPassword({
-          phone: phone,
-          password: password
+      if (existingProfile) {
+        console.log(`[telegram] Returning user found: ${existingProfile.full_name}`);
+        const password = derivePassword(chatId);
+        const { data: authData, error: signInErr } = await supabaseAdmin.auth.signInWithPassword({
+          phone: existingProfile.phone,
+          password,
         });
 
-        if (signInError) {
-          console.error('Error signing in user:', signInError);
-          await sendTelegramMessage(chatId, '⚠️ Authentication failed. Please contact support.');
-          return res.status(200).json({ success: false, error: 'Sign in failed' });
-        }
-
-        if (!profile && authData.user) {
-          userId = authData.user.id;
-          const { data: newProfile, error: createProfileError } = await supabaseAdmin
-            .from('profiles')
-            .insert([{
-              user_id: userId,
-              full_name: `${contact.first_name || ''} ${contact.last_name || ''}`.trim() || 'Telegram User',
-              username: username || `tg_${chatId}`,
-              phone: phone,
-              telegram_chat_id: String(chatId),
-              telegram_username: username,
-              role: 'customer',
-              current_mode: 'customer'
-            }])
-            .select()
-            .single();
-
-          if (createProfileError) {
-            console.error('Error creating profile:', createProfileError);
-          } else {
-            profile = newProfile;
-          }
+        if (signInErr || !authData?.session) {
+          console.error('[telegram] Sign-in for returning user failed:', signInErr?.message);
+          await sendMessage(chatId, '⚠️ Authentication failed. Please contact support.');
+          return;
         }
 
         const jwtPayload = {
           access_token: authData.session.access_token,
           refresh_token: authData.session.refresh_token,
           user: {
-            id: profile ? profile.id : authData.user.id,
+            id: existingProfile.id,
             user_id: authData.user.id,
-            full_name: profile ? profile.full_name : 'Telegram User',
-            username: username || `tg_${chatId}`,
-            phone: phone,
-            role: profile ? profile.role : 'customer',
-            current_mode: profile ? profile.current_mode : 'customer'
-          }
+            full_name: existingProfile.full_name,
+            username: existingProfile.username,
+            phone: existingProfile.phone,
+            role: existingProfile.role,
+            current_mode: existingProfile.current_mode,
+          },
         };
 
-        await supabaseAdmin
-          .from('auth_pending_sessions')
-          .update({
-            status: 'APPROVED',
-            user_id: authData.user.id,
-            jwt_payload: jwtPayload
-          })
-          .eq('session_token', sessionToken);
-
-        const channel = supabaseAdmin.channel(`auth:${sessionToken}`);
-        await channel.subscribe(async (status) => {
-          if (status === 'SUBSCRIBED') {
-            await channel.send({
-              type: 'broadcast',
-              event: 'AUTH_SUCCESS',
-              payload: jwtPayload
-            });
-            console.log(`Successfully broadcasted AUTH_SUCCESS for session: ${sessionToken}`);
-          }
-        });
-
-        await sendTelegramMessage(chatId, '🎉 Authentication successful! Please return to the Mescott app to continue.');
-
-        return res.status(200).json({ success: true });
+        await approveSession(token, authData.user.id, jwtPayload);
+        await sendMessage(chatId, '🎉 Signed in successfully! Return to the Mescott app.');
+        return;
       }
 
-      // Handle /start command
-      if (text && text.startsWith('/start')) {
-        const token = text.split(' ')[1];
-        if (!token) {
-          await sendTelegramMessage(chatId, "Welcome to Mescott! Please use the 'Continue with Telegram' button in the Mescott mobile app to sign in.");
-          return res.status(200).json({ success: true });
+      // New user — ask them to share their phone number
+      await sendMessage(
+        chatId,
+        '👋 Welcome to Mescott!\n\nTo complete sign-in, please share your phone number using the button below.',
+        {
+          keyboard: [[{ text: '📱 Share Phone Number', request_contact: true }]],
+          resize_keyboard: true,
+          one_time_keyboard: true,
         }
-
-        const { data: sessionRow, error: sessionError } = await supabaseAdmin
-          .from('auth_pending_sessions')
-          .select('*')
-          .eq('session_token', token)
-          .single();
-
-        if (sessionError || !sessionRow) {
-          await sendTelegramMessage(chatId, '❌ Invalid or expired login session. Please try logging in again from Mescott.');
-          return res.status(200).json({ success: true });
-        }
-
-        if (sessionRow.status !== 'PENDING') {
-          await sendTelegramMessage(chatId, '⚠️ This login session has already been processed.');
-          return res.status(200).json({ success: true });
-        }
-
-        const ageInSeconds = (Date.now() - new Date(sessionRow.created_at).getTime()) / 1000;
-        if (ageInSeconds > 300) {
-          await supabaseAdmin
-            .from('auth_pending_sessions')
-            .update({ status: 'EXPIRED' })
-            .eq('session_token', token);
-
-          await sendTelegramMessage(chatId, '⌛ This login session has expired. Please try again from Mescott.');
-          return res.status(200).json({ success: true });
-        }
-
-        await supabaseAdmin
-          .from('auth_pending_sessions')
-          .update({
-            device_info: {
-              ...sessionRow.device_info,
-              telegram_chat_id: String(chatId),
-              telegram_username: username
-            }
-          })
-          .eq('session_token', token);
-
-        const { data: profile } = await supabaseAdmin
-          .from('profiles')
-          .select('*')
-          .eq('telegram_chat_id', String(chatId))
-          .maybeSingle();
-
-        if (profile) {
-          const password = generateUserPassword(chatId);
-          const { data: authData, error: signInError } = await supabaseAdmin.auth.signInWithPassword({
-            phone: profile.phone,
-            password: password
-          });
-
-          if (signInError) {
-            console.error('Error signing in existing Telegram user:', signInError);
-            await sendTelegramMessage(chatId, '⚠️ Authentication failed. Please contact support.');
-            return res.status(200).json({ success: true });
-          }
-
-          const jwtPayload = {
-            access_token: authData.session.access_token,
-            refresh_token: authData.session.refresh_token,
-            user: {
-              id: profile.id,
-              user_id: authData.user.id,
-              full_name: profile.full_name,
-              username: profile.username || username,
-              phone: profile.phone,
-              role: profile.role,
-              current_mode: profile.current_mode
-            }
-          };
-
-          await supabaseAdmin
-            .from('auth_pending_sessions')
-            .update({
-              status: 'APPROVED',
-              user_id: authData.user.id,
-              jwt_payload: jwtPayload
-            })
-            .eq('session_token', token);
-
-          const channel = supabaseAdmin.channel(`auth:${token}`);
-          await channel.subscribe(async (status) => {
-            if (status === 'SUBSCRIBED') {
-              await channel.send({
-                type: 'broadcast',
-                event: 'AUTH_SUCCESS',
-                payload: jwtPayload
-              });
-              console.log(`Successfully broadcasted AUTH_SUCCESS for existing session: ${token}`);
-            }
-          });
-
-          await sendTelegramMessage(chatId, '🎉 Sign in successful! You can now return to the Mescott app.');
-        } else {
-          const textMsg = 'To complete your sign in or registration with Mescott, please click the button below to share your phone number.';
-          const replyMarkup = {
-            keyboard: [[{ text: 'Share Contact 📱', request_contact: true }]],
-            one_time_keyboard: true,
-            resize_keyboard: true
-          };
-
-          await sendTelegramMessage(chatId, textMsg, replyMarkup);
-        }
-      }
+      );
+      return;
     }
 
-    return res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('Telegram webhook error:', error);
-    return res.status(500).json({ success: false, error: 'Internal server error', details: error.message });
+    // ── Contact shared (phone number) ───────────────────────────────────────
+    if (contact) {
+      // Make sure they're sharing their own number
+      if (String(contact.user_id) !== String(from.id)) {
+        await sendMessage(chatId, '⚠️ Please share <b>your own</b> phone number, not someone else\'s.');
+        return;
+      }
+
+      const rawPhone = contact.phone_number;
+      const phone = rawPhone.startsWith('+') ? rawPhone : `+${rawPhone}`;
+
+      // Find the pending session for this chatId
+      const { data: session, error: sessionError } = await supabaseAdmin
+        .from('auth_pending_sessions')
+        .select('*')
+        .eq('status', 'PENDING')
+        .eq('device_info->>telegram_chat_id', String(chatId))
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (sessionError || !session) {
+        await sendMessage(chatId, '❌ No active login session found. Please tap <b>Continue with Telegram</b> in the Mescott app first.');
+        return;
+      }
+
+      const authResult = await authenticateUser(phone, chatId, username, contact);
+      if (!authResult) {
+        await sendMessage(chatId, '⚠️ Authentication failed. Please try again or contact support.');
+        return;
+      }
+
+      const { session: authSession, user: authUser, profile } = authResult;
+
+      const jwtPayload = {
+        access_token: authSession.access_token,
+        refresh_token: authSession.refresh_token,
+        user: {
+          id: profile?.id || authUser.id,
+          user_id: authUser.id,
+          full_name: profile?.full_name || [contact.first_name, contact.last_name].filter(Boolean).join(' ') || 'Telegram User',
+          username: profile?.username || username || `tg_${chatId}`,
+          phone,
+          role: profile?.role || 'customer',
+          current_mode: profile?.current_mode || 'customer',
+        },
+      };
+
+      const approved = await approveSession(session.session_token, authUser.id, jwtPayload);
+      if (approved) {
+        await sendMessage(chatId, '🎉 Authentication successful! Return to the Mescott app to continue.', {
+          remove_keyboard: true,
+        });
+      } else {
+        await sendMessage(chatId, '⚠️ Something went wrong finalizing your session. Please try again.');
+      }
+      return;
+    }
+  } catch (err) {
+    console.error('[telegram] Unhandled error in webhook handler:', err);
   }
 };
